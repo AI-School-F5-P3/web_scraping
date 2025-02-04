@@ -1,0 +1,65 @@
+/* frontend/assets/styles.css */
+
+/* Fuente principal */
+html, body, [class*="css"] {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+/* Colores corporativos */
+:root {
+    --primary: #2c3e50;
+    --secondary: #3498db;
+    --background: #f8f9fa;
+}
+
+/* Cabecera personalizada */
+.stApp header {
+    background-color: var(--primary) !important;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
+/* Mensajes del chat */
+.stChatMessage {
+    border-radius: 15px;
+    padding: 1.5rem;
+    margin: 1rem 0;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.stChatMessage[data-testid="user"] {
+    background-color: #e3f2fd;
+    border: 1px solid #90caf9;
+}
+
+.stChatMessage[data-testid="assistant"] {
+    background-color: #f5f5f5;
+    border: 1px solid #e0e0e0;
+}
+
+/* Botones y controles */
+.stButton button {
+    background-color: var(--secondary) !important;
+    color: white !important;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+}
+
+.stButton button:hover {
+    opacity: 0.9;
+    transform: translateY(-1px);
+}
+
+/* Tarjetas de métricas */
+[data-testid="metric-container"] {
+    background: white !important;
+    border-radius: 10px;
+    padding: 1rem;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+}
+
+/* Ajustes responsive */
+@media (max-width: 768px) {
+    .stSidebar {
+        width: 100% !important;
+    }
+}
