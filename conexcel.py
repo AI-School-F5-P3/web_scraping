@@ -7,6 +7,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import unicodedata
 from bs4 import BeautifulSoup
+from tqdm import tqdm 
 
 # Desactivar advertencias de SSL
 urllib3.disable_warnings(InsecureRequestWarning)
@@ -135,21 +136,19 @@ def generate_possible_urls(company_name):
 
 def process_excel(file_path, url_column='URL'):
     """Procesa un archivo Excel con nombres de empresas y URLs."""
-    # Leer el Excel
     df = pd.read_excel(file_path)
     
-    # Añadir columnas para los resultados
     df['URL_Válida'] = False
     df['URL_Sugerida'] = ''
     df['URL_Comentario'] = ''
     
-    # Procesar cada fila
-    for idx, row in df.iterrows():
-        company_name = row['RAZON_SOCIAL']  # Ajusta el nombre de la columna según tu Excel
+    # Añadir barra de progreso
+    print("\nProcesando URLs...")
+    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Verificando empresas"):
+        company_name = row['RAZON_SOCIAL']
         current_url = row['URL'] if pd.notna(row[url_column]) else None
         
         if current_url:
-            # Verificar URL existente
             session = create_session()
             try:
                 is_valid = verify_company_url_match(current_url, company_name, session)
@@ -158,7 +157,6 @@ def process_excel(file_path, url_column='URL'):
             finally:
                 session.close()
         else:
-            # Buscar URLs posibles
             possible_urls = generate_possible_urls(company_name)
             if possible_urls:
                 df.at[idx, 'URL_Sugerida'] = possible_urls[0]
@@ -166,7 +164,6 @@ def process_excel(file_path, url_column='URL'):
             else:
                 df.at[idx, 'URL_Comentario'] = 'No se encontró URL válida'
     
-    # Guardar resultados
     output_file = file_path.replace('.xlsx', '_procesado.xlsx')
     df.to_excel(output_file, index=False)
     return output_file
