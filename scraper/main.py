@@ -9,7 +9,7 @@ from selenium.common.exceptions import TimeoutException
 import time
 import redis
 from config import Config
-from database.connectors import SQLServerConnector
+from database.connectors import MySQLConnector
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 

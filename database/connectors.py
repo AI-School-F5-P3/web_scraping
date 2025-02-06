@@ -1,80 +1,101 @@
 # database/connectors.py
-import pyodbc
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, insert
+from sqlalchemy.orm import sessionmaker
 from contextlib import contextmanager
 from config import Config
 import logging
 import time
+from typing import List, Dict, Any
+from .models import metadata, empresas
+import traceback
 
 logger = logging.getLogger(__name__)
 
-class SQLServerConnector:
+class MySQLConnector:
     def __init__(self):
-        self.connection_string = Config.SQL_SERVER_CONN_STR
         self.engine = create_engine(
-            f"mssql+pyodbc:///?odbc_connect={self.connection_string}",
-            fast_executemany=True
+            Config.SQLALCHEMY_DATABASE_URL,
+            pool_size=5,
+            max_overflow=10,
+            pool_timeout=30,
+            pool_recycle=3600
         )
+        
+        # Add this line to create tables if they don't exist
+        metadata.create_all(self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine)
 
     @contextmanager
-    def get_connection(self, max_retries=3, retry_delay=5):
-        """Context manager for transactional connections with retry logic"""
+    def get_session(self, max_retries=3, retry_delay=5):
+        """Context manager for database sessions with retry logic"""
+        session = self.SessionLocal()
         retries = 0
+        
         while retries < max_retries:
             try:
-                conn = self.engine.connect()
-                yield conn
+                yield session
+                session.commit()
                 return
-            except pyodbc.OperationalError as e:
+            except Exception as e:
+                session.rollback()
                 retries += 1
-                logger.error(f"SQL Server connection failed. Retrying in {retry_delay} seconds... (Attempt {retries}/{max_retries})")
+                logger.error(f"Database error. Retrying in {retry_delay} seconds... (Attempt {retries}/{max_retries})")
                 logger.debug(str(e))
                 time.sleep(retry_delay)
-        logger.error("Maximum number of retries exceeded. Unable to connect to SQL Server.")
-        raise Exception("Failed to connect to SQL Server after multiple retries.")
+                if retries == max_retries:
+                    raise
+            finally:
+                session.close()
 
-    def test_connection(self):
-        """Prueba básica de conectividad"""
+    def test_connection(self) -> bool:
+        """Test database connectivity"""
         try:
-            with self.get_connection() as conn:
-                result = conn.execute("SELECT 1 AS test;")
-                return result.scalar() == 1
+            with self.get_session() as session:
+                session.execute("SELECT 1")
+                return True
         except Exception as e:
-            logger.error(f"Error en test de conexión: {e}")
+            logger.error(f"Connection test failed: {e}")
             return False
 
-    def bulk_insert_companies(self, data):
-        """Inserción masiva de datos usando executemany"""
-        insert_query = """
-        INSERT INTO empresas (
-            nif, razon_social, provincia, website, 
-            telefonos, redes_sociales, ecommerce, confidence_score
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """
-        
+    def bulk_insert_companies(self, data: List[Dict[str, Any]]) -> bool:
         try:
-            with self.get_connection() as conn:
+            with self.engine.connect() as conn:
+            # Use INSERT IGNORE to skip duplicates
+                stmt = insert(empresas).prefix_with('IGNORE')
                 conn.execute(
-                    insert_query,
-                    [(
-                        item['nif'], item['razon_social'], item['provincia'],
-                        item['website'], item['telefonos'], item['redes_sociales'],
-                        item['ecommerce'], item['confidence_score']
-                    ) for item in data]
+                    stmt,
+                    [
+                        {
+                            'codigo_infotel': item.get('COD_INFOTEL', ''),
+                            'nif': item.get('NIF', ''),
+                            'razon_social': item.get('RAZON_SOCIAL', ''),
+                            'direccion': item.get('DOMICILIO', ''),
+                            'codigo_postal': item.get('COD_POSTAL', ''),
+                            'poblacion': item.get('NOM_POBLACION', ''),
+                            'provincia': item.get('NOM_PROVINCIA', ''),
+                            'website': item.get('URL', ''),
+                            'url_valid': item.get('URL_VALID', False),
+                            'confidence_score': item.get('confidence_score', 100)
+                        }
+                        for item in data
+                    ]
                 )
                 conn.commit()
                 return True
-        except pyodbc.IntegrityError as e:
-            logger.warning(f"Duplicado detectado: {str(e)}")
-            return False
         except Exception as e:
-            logger.error(f"Error en inserción masiva: {str(e)}")
-            raise
-
-# Ejemplo de uso:
-if __name__ == "__main__":
-    connector = SQLServerConnector()
-    if connector.test_connection():
-        print("✅ Conexión exitosa a SQL Server")
-    else:
-        print("❌ Error de conexión")
+            logger.error(f"Bulk insert failed: {str(e)}")
+            return False
+        
+def delete_companies(self, criteria: Dict[str, Any]) -> int:
+    """Erase companies matching criteria"""
+    try:
+        with self.engine.connect() as conn:
+            stmt = empresas.delete()
+            for key, value in criteria.items():
+                stmt = stmt.where(getattr(empresas.c, key) == value)
+            result = conn.execute(stmt)
+            conn.commit()
+            return result.rowcount
+    except Exception as e:
+        logger.error(f"Delete failed: {str(e)}")
+        return 0

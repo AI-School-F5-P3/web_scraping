@@ -20,21 +20,17 @@ class ScrapingWorker:
             task.last_attempt = datetime.now()
             task.retry_count += 1
             
-            # Implement actual scraping logic here
-            # ...
-            
-            self.redis.hset(
-                f"task_result:{task.company_id}",
-                mapping={"status": "completed", "timestamp": datetime.now().isoformat()}
-            )
+            # Update stats atomically using pipeline
+            pipe = self.redis.pipeline()
+            pipe.incr("scraping:completed")
+            pipe.execute()
             return True
             
         except Exception as e:
             logger.error(f"Error processing task {task.url}: {str(e)}")
-            if task.retry_count < 3:
-                self.redis.lpush("scraping:pending", task.to_dict())
-            else:
-                self.redis.sadd("scraping:failed", task.url)
+            pipe = self.redis.pipeline()
+            pipe.incr("scraping:failed")
+            pipe.execute()
             return False
 
     def start(self):

@@ -1,25 +1,28 @@
 # frontend/main.py
+# Standard library
+import sys
+from pathlib import Path
+import time
+from datetime import datetime
+import json
+from typing import Dict, List, Optional
+
+# Third party
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import time
-from datetime import datetime
-import sys
-import os
-from pathlib import Path
 import redis
-from typing import Dict, List, Optional
-import json
 
-# Add root directory to PYTHONPATH
-current_dir = Path(__file__).parent
-project_root = current_dir.parent
+# Set up project path
+project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
-from scraper.main import RegistradoresScraper
+# Local imports
 from config import Config
+from scraper.main import RegistradoresScraper
 from components.chat import ChatInterface
 from components.metrics import MetricsInterface
+from components.data_processor import DataProcessorInterface
 
 def initialize_redis() -> Optional[redis.Redis]:
     """Initialize Redis connection"""
@@ -50,10 +53,17 @@ def initialize_session_state():
 def get_scraping_stats(redis_client: redis.Redis) -> Dict:
     """Get current scraping statistics from Redis"""
     try:
-        stats = redis_client.hgetall("scraping:stats")
-        total = int(stats.get(b'total', 0))
-        completed = int(stats.get(b'completed', 0))
-        failed = int(stats.get(b'failed', 0))
+        # Use pipeline to get all stats atomically
+        pipe = redis_client.pipeline()
+        pipe.get("scraping:total")  # Total tasks
+        pipe.get("scraping:completed")  # Completed tasks
+        pipe.get("scraping:failed")  # Failed tasks
+        total, completed, failed = pipe.execute()
+        
+        # Convert bytes to integers, defaulting to 0 if None
+        total = int(total) if total else 0
+        completed = int(completed) if completed else 0
+        failed = int(failed) if failed else 0
         
         return {
             "total": total,
@@ -63,7 +73,7 @@ def get_scraping_stats(redis_client: redis.Redis) -> Dict:
             "success_rate": round((completed / (completed + failed) * 100) if (completed + failed) > 0 else 0, 1)
         }
     except Exception as e:
-        st.error(f"Error al obtener estadísticas: {str(e)}")
+        logger.error(f"Error getting stats: {str(e)}")
         return {
             "total": 0,
             "completed": 0,
@@ -123,10 +133,23 @@ def render_sidebar(redis_client: redis.Redis):
         - [Soporte](mailto:support@example.com)
         """)
 
-def render_main_content(chat: ChatInterface, metrics: MetricsInterface, redis_client: redis.Redis):
+def render_main_content(chat: ChatInterface, metrics: MetricsInterface, redis_client: redis.Redis, data_processor: DataProcessorInterface):
     """Render main content area"""
     st.title("📊 Panel de Inteligencia Empresarial")
-    st.markdown("### Consultas en Lenguaje Natural")
+        # Add a tab structure
+    tab1, tab2 = st.tabs(["Análisis", "Subida de datos"])
+    
+    with tab1:
+        # Existing chat and analytics content
+        st.markdown("### Consultas en Lenguaje Natural")
+        chat_container = st.container()
+        with chat_container:
+            chat.display_chat_history()
+            # ... rest of existing chat logic
+    
+    with tab2:
+        st.markdown("## 📤 Carga y procesamiento de datos")
+        data_processor.render_upload_section(main_area=True)
     
     # Chat interface
     chat_container = st.container()
@@ -163,19 +186,7 @@ def render_analytics(metrics: MetricsInterface):
     """Render analytics section"""
     st.markdown("## 📊 Análisis Geográfico")
     
-    # Sample data for visualization
-    provincia_data = pd.DataFrame({
-        "Provincia": ["Madrid", "Barcelona", "Valencia"],
-        "Empresas": [45000, 32000, 15000]
-    })
-    
-    contactabilidad_data = pd.DataFrame({
-        "Provincia": ["Madrid", "Barcelona", "Valencia"],
-        "Teléfonos Válidos (%)": [78.4, 65.2, 82.1],
-        "Webs Activas (%)": [92.3, 88.7, 85.4]
-    })
-    
-    metrics.display_geographic_analysis(provincia_data)
+    metrics.display_geographic_analysis()
     
 def render_preview_data(redis_client: redis.Redis):
     """Render preview of scraped data"""
@@ -294,14 +305,15 @@ def main():
     redis_client = initialize_redis()
     chat = ChatInterface()
     metrics = MetricsInterface()
+    data_processor = DataProcessorInterface()
     
     if redis_client is None:
         st.error("No se puede continuar sin conexión a Redis")
         return
     
-    # Render layout
+    # Render layout and pass data_processor to main_content
     render_sidebar(redis_client)
-    render_main_content(chat, metrics, redis_client)
+    render_main_content(chat, metrics, redis_client, data_processor)
     render_preview_data(redis_client)
     
     # Only show error monitoring if there are errors
