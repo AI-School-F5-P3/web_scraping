@@ -8,6 +8,7 @@ from urllib3.util.retry import Retry
 import unicodedata
 from bs4 import BeautifulSoup
 from tqdm import tqdm 
+import os
 
 # Desactivar advertencias de SSL
 urllib3.disable_warnings(InsecureRequestWarning)
@@ -136,7 +137,23 @@ def generate_possible_urls(company_name):
 
 def process_excel(file_path, url_column='URL'):
     """Procesa un archivo Excel con nombres de empresas y URLs."""
-    df = pd.read_excel(file_path)
+    # Determine the file extension
+    _, ext = os.path.splitext(file_path)
+    
+    try:
+        # Read the input file
+        if ext.lower() == '.xls':
+            # For .xls files
+            df = pd.read_excel(file_path, engine='xlrd')
+        else:
+            # For .xlsx files
+            df = pd.read_excel(file_path, engine='openpyxl')
+    except Exception as e:
+        print(f"Error al leer el archivo: {str(e)}")
+        print("Asegúrate de tener instaladas las librerías necesarias:")
+        print("Para archivos .xlsx: pip install openpyxl")
+        print("Para archivos .xls: pip install xlrd")
+        return None
     
     df['URL_Válida'] = False
     df['URL_Sugerida'] = ''
@@ -164,10 +181,17 @@ def process_excel(file_path, url_column='URL'):
             else:
                 df.at[idx, 'URL_Comentario'] = 'No se encontró URL válida'
     
-    output_file = file_path.replace('.xlsx', '_procesado.xlsx')
-    df.to_excel(output_file, index=False)
-    return output_file
-
+    # Create output filename with .xlsx extension
+    output_file = os.path.splitext(file_path)[0] + '_procesado.xlsx'
+    
+    try:
+        # Always save as .xlsx format using openpyxl
+        df.to_excel(output_file, index=False, engine='openpyxl')
+        return output_file
+    except Exception as e:
+        print(f"Error al guardar el archivo: {str(e)}")
+        print("Asegúrate de tener instalada la librería openpyxl: pip install openpyxl")
+        return None
 # Ejemplo de uso
 if __name__ == "__main__":
     file_path = input("Introduce la ruta del archivo Excel: ").strip('"')
