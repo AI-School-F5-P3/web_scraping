@@ -17,10 +17,16 @@ import whois
 import dns.resolver
 from functools import wraps
 import time
+import sys
+import signal
 
 # Desactivar advertencias de SSL
 urllib3.disable_warnings(InsecureRequestWarning)
+def signal_handler(signum, frame):
+    print("\nPrograma interrumpido por el usuario. Guardando progreso...")
+    sys.exit(0)
 
+signal.signal(signal.SIGINT, signal_handler)
 class RateLimiter:
     def __init__(self, calls_per_minute=30):
         self.calls_per_minute = calls_per_minute
@@ -113,8 +119,8 @@ def create_session():
     session = requests.Session()
     
     retry_strategy = Retry(
-        total=3,
-        backoff_factor=1,
+        total=1,  # Reduced from 3 to 1
+        backoff_factor=0.5,  # Reduced from 1 to 0.5
         status_forcelist=[429, 500, 502, 503, 504],
     )
     
@@ -128,21 +134,22 @@ def create_session():
 def get_page_content(url, session):
     """Obtiene el contenido de una página web con rate limiting."""
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'
     }
     
     try:
+        print(f"Intentando acceder a {url}...")
         response = session.get(
             url, 
-            timeout=(15, 30),
+            timeout=(10, 20),  # Increased timeouts
             verify=False,
             headers=headers
         )
         response.raise_for_status()
+        print(f"Acceso exitoso a {url}")
         return response.text
-    except:
+    except Exception as e:
+        print(f"Error accediendo a {url}: {str(e)}")
         return None
 
 def verify_company_url(url, company_name, session):
@@ -248,24 +255,40 @@ def generate_possible_urls(company_name):
     return list(valid_domains)
 
 def verify_urls_parallel(urls, company_name):
-    """Verifica múltiples URLs en paralelo."""
     def verify_single_url(url):
         session = create_session()
         try:
-            is_valid, data = verify_company_url(url, company_name, session)
+            print(f"\nIniciando verificación de {url}")
+            future = concurrent.futures.ThreadPoolExecutor().submit(
+                verify_company_url, url, company_name, session
+            )
+            is_valid, data = future.result(timeout=8)  # Timeout individual por URL
             return url, is_valid, data
-        except Exception as e:
+        except (concurrent.futures.TimeoutError, Exception) as e:
+            print(f"Timeout o error en {url}")
             return url, False, None
         finally:
             session.close()
-    
+
     results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        future_to_url = {executor.submit(verify_single_url, url): url for url in urls}
-        for future in concurrent.futures.as_completed(future_to_url):
-            url, is_valid, data = future.result()
-            if is_valid:
-                results[url] = data
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = {executor.submit(verify_single_url, url): url for url in urls}
+        done, _ = concurrent.futures.wait(
+            futures, 
+            timeout=10,  # Timeout global reducido
+            return_when=concurrent.futures.FIRST_COMPLETED
+        )
+        
+        for future in done:
+            try:
+                url, is_valid, data = future.result(timeout=1)
+                if is_valid:
+                    results[url] = data
+            except Exception:
+                continue
+
+        executor._threads.clear()
+        concurrent.futures.thread._threads_queues.clear()
     
     return results
 
@@ -294,9 +317,6 @@ def process_excel(file_path, url_column='URL'):
             df = pd.read_excel(file_path, engine='openpyxl')
     except Exception as e:
         print(f"Error al leer el archivo: {str(e)}")
-        print("Asegúrate de tener instaladas las librerías necesarias:")
-        print("Para archivos .xlsx: pip install openpyxl")
-        print("Para archivos .xls: pip install xlrd")
         return None
     
     # Inicializar columnas
@@ -314,72 +334,83 @@ def process_excel(file_path, url_column='URL'):
     
     print("\nProcesando URLs...")
     for idx, row in tqdm(df.iterrows(), total=len(df), desc="Verificando empresas"):
-        company_name = row['RAZON_SOCIAL']
-        
-        # Verificar caché
-        cached_urls, cached_data = cache.get(company_name)
-        if cached_urls:
-            valid_urls = cached_urls
-            verification_data = cached_data
-        else:
-            # Generar y verificar URLs
-            possible_urls = generate_possible_urls(company_name)
-            if row[url_column] and pd.notna(row[url_column]):
-                possible_urls.append(row[url_column])
+        try:
+            print(f"\nProcesando empresa {idx + 1}: {row['RAZON_SOCIAL']}")
+            company_name = row['RAZON_SOCIAL']
             
-            try:
+            # Verificar caché
+            cached_urls, cached_data = cache.get(company_name)
+            if cached_urls:
+                valid_urls = cached_urls
+                verification_data = cached_data
+            else:
+                # Generar y verificar URLs
+                possible_urls = generate_possible_urls(company_name)
+                if row[url_column] and pd.notna(row[url_column]):
+                    possible_urls.append(row[url_column])
+                
+                print(f"URLs a verificar: {possible_urls}")
                 verification_data = verify_urls_parallel(possible_urls, company_name)
                 valid_urls = list(verification_data.keys())
-            except Exception as e:
-                print(f"⚠️ Error verificando {company_name}: {e}")
-                continue
-            
-            # Actualizar caché
-            if verification_data:
-                cache.set(company_name, valid_urls, verification_data)
+                
+                # Actualizar caché
+                if verification_data:
+                    cache.set(company_name, valid_urls, verification_data)
         
-        if verification_data:
-            # Actualizar DataFrame
-            df.at[idx, 'URL_Válida'] = True
-            df.at[idx, 'URLs_Encontradas'] = ', '.join(valid_urls)
-            
-            # Recopilar todos los teléfonos y redes sociales de todas las URLs válidas
-            all_phones = []
-            social_links = {
-                'facebook': '',
-                'twitter': '',
-                'instagram': '',
-                'linkedin': '',
-                'youtube': ''
-            }
-            
-            for data in verification_data.values():
-                if 'phones' in data:
-                    all_phones.extend(data['phones'])
-                if 'social_links' in data:
-                    for network, link in data['social_links'].items():
-                        if link and not social_links[network]:  # Tomar el primer link válido encontrado
-                            social_links[network] = link
-            
-            # Asignar teléfonos (limitados a 3)
-            unique_phones = list(dict.fromkeys(all_phones))[:3]
-            for i, phone in enumerate(unique_phones, 1):
-                df.at[idx, f'Teléfono_{i}'] = phone
-            
-            # Asignar redes sociales
-            df.at[idx, 'Facebook'] = social_links['facebook']
-            df.at[idx, 'Twitter'] = social_links['twitter']
-            df.at[idx, 'Instagram'] = social_links['instagram']
-            df.at[idx, 'LinkedIn'] = social_links['linkedin']
-            df.at[idx, 'YouTube'] = social_links['youtube']
-            
-            # Intentar obtener información WHOIS
-            try:
-                whois_info = get_whois_info(valid_urls[0].split('/')[2])
-                if whois_info:
-                    df.at[idx, 'Info_Adicional'] = json.dumps(whois_info, default=str)
-            except:
-                pass
+            if verification_data:
+                # Actualizar DataFrame
+                df.at[idx, 'URL_Válida'] = True
+                df.at[idx, 'URLs_Encontradas'] = ', '.join(valid_urls)
+                
+                # Recopilar todos los teléfonos y redes sociales de todas las URLs válidas
+                all_phones = []
+                social_links = {
+                    'facebook': '',
+                    'twitter': '',
+                    'instagram': '',
+                    'linkedin': '',
+                    'youtube': ''
+                }
+                
+                for data in verification_data.values():
+                    if 'phones' in data:
+                        all_phones.extend(data['phones'])
+                    if 'social_links' in data:
+                        for network, link in data['social_links'].items():
+                            if link and not social_links[network]:  # Tomar el primer link válido encontrado
+                                social_links[network] = link
+                
+                # Asignar teléfonos (limitados a 3)
+                unique_phones = list(dict.fromkeys(all_phones))[:3]
+                for i, phone in enumerate(unique_phones, 1):
+                    df.at[idx, f'Teléfono_{i}'] = phone
+                
+                # Asignar redes sociales
+                df.at[idx, 'Facebook'] = social_links['facebook']
+                df.at[idx, 'Twitter'] = social_links['twitter']
+                df.at[idx, 'Instagram'] = social_links['instagram']
+                df.at[idx, 'LinkedIn'] = social_links['linkedin']
+                df.at[idx, 'YouTube'] = social_links['youtube']
+                
+                # Intentar obtener información WHOIS
+                try:
+                    whois_info = get_whois_info(valid_urls[0].split('/')[2])
+                    if whois_info:
+                        df.at[idx, 'Info_Adicional'] = json.dumps(whois_info, default=str)
+                except:
+                    pass
+        except KeyboardInterrupt:
+            print("\nGuardando progreso antes de salir...")
+            output_file = os.path.splitext(file_path)[0] + '_procesado3.xlsx'
+            df.to_excel(output_file, index=False, engine='openpyxl')
+            sys.exit(0)
+        except Exception as e:
+            print(f"Error procesando empresa {idx + 1}: {str(e)}")
+            continue
+    
+    output_file = os.path.splitext(file_path)[0] + '_procesado3.xlsx'
+    df.to_excel(output_file, index=False, engine='openpyxl')
+    return output_file
     
     output_file = os.path.splitext(file_path)[0] + '_procesado3.xlsx'
     try:
