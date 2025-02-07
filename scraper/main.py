@@ -20,7 +20,7 @@ class RegistradoresScraper:
     def __init__(self):
         self.base_url = "https://opendata.registradores.org/directorio"
         self.driver = self._init_driver()
-        self.connector = SQLServerConnector()
+        self.connector = MySQLConnector() 
         
     def _init_driver(self):
         options = webdriver.ChromeOptions()

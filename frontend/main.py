@@ -23,6 +23,7 @@ from scraper.main import RegistradoresScraper
 from components.chat import ChatInterface
 from components.metrics import MetricsInterface
 from components.data_processor import DataProcessorInterface
+from scraper.manager import ScrapingManager
 
 def initialize_redis() -> Optional[redis.Redis]:
     """Initialize Redis connection"""
@@ -95,15 +96,30 @@ def render_sidebar(redis_client: redis.Redis):
             help="Elija el proveedor para el motor de consultas analíticas"
         )
         
-        # Scraping control
-        if st.button("🚀 Iniciar Web Scraping", disabled=st.session_state.scraping_active):
-            try:
-                scraper = RegistradoresScraper()
-                scraper.run()
-                st.session_state.scraping_active = True
-                st.success("¡Scraping iniciado!")
-            except Exception as e:
-                st.error(f"Error al iniciar scraping: {str(e)}")
+        # Scraping Options
+        st.subheader("🔍 Opciones de Scraping")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("🔄 Validar URLs", help="Validar y actualizar URLs existentes"):
+                try:
+                    manager = ScrapingManager()
+                    with st.spinner("Validando URLs existentes..."):
+                        results = manager.validate_existing_urls()
+                        st.success(f"Procesadas {len(results)} empresas")
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+        
+        with col2:
+            if st.button("🔎 Buscar Webs", help="Buscar webs de empresas sin URL"):
+                try:
+                    manager = ScrapingManager()
+                    with st.spinner("Buscando nuevas webs..."):
+                        results = manager.find_missing_websites()
+                        st.success(f"Procesadas {len(results)} empresas")
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
         
         # Stats section
         st.markdown("---")
@@ -136,16 +152,31 @@ def render_sidebar(redis_client: redis.Redis):
 def render_main_content(chat: ChatInterface, metrics: MetricsInterface, redis_client: redis.Redis, data_processor: DataProcessorInterface):
     """Render main content area"""
     st.title("📊 Panel de Inteligencia Empresarial")
-        # Add a tab structure
+    
     tab1, tab2 = st.tabs(["Análisis", "Subida de datos"])
     
     with tab1:
-        # Existing chat and analytics content
         st.markdown("### Consultas en Lenguaje Natural")
         chat_container = st.container()
+        
         with chat_container:
             chat.display_chat_history()
-            # ... rest of existing chat logic
+            
+            # Query input
+            query = st.chat_input("Escribe tu consulta (ej: 'Empresas en Madrid con ecommerce')", key="chat_input_tab1")
+
+            if query:
+                # Add user message
+                chat.add_message("user", query)
+                
+                # Process with agents
+                with st.spinner("Procesando consulta..."):
+                    result = chat.process_query(query)
+                    
+                    if result["success"]:
+                        chat.add_message("assistant", result["response"])
+                    else:
+                        chat.add_message("assistant", f"Error: {result['error']}")
     
     with tab2:
         st.markdown("## 📤 Carga y procesamiento de datos")
@@ -155,28 +186,6 @@ def render_main_content(chat: ChatInterface, metrics: MetricsInterface, redis_cl
     chat_container = st.container()
     with chat_container:
         chat.display_chat_history()
-        
-        # Query input
-        query = st.chat_input("Escribe tu consulta (ej: 'Empresas en Madrid con ecommerce')")
-        if query:
-            chat.add_message("user", query)
-            
-            # Process query (implement your query processing logic here)
-            with st.spinner("Procesando consulta..."):
-                time.sleep(1.5)  # Simulate processing
-                
-                # Example response
-                response = f"**Respuesta usando {st.session_state.llm_provider}:**\n```sql\nSELECT * FROM empresas WHERE provincia = 'Madrid' AND ecommerce = 1;\n```"
-                
-                # Example results
-                results = pd.DataFrame({
-                    "Empresa": ["Tech Corp", "Digital Solutions"],
-                    "Provincia": ["Madrid", "Madrid"],
-                    "Teléfono": ["+34911234567", ""],
-                    "Ecommerce": ["Sí", "No"]
-                })
-                
-                chat.add_message("assistant", response, results)
     
     # Analytics section
     st.markdown("---")

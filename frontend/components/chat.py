@@ -1,69 +1,37 @@
 # frontend/components/chat.py
+from typing import Optional, Dict, Any
 import streamlit as st
+from chatbot.agent_setup import ScrapingAgent
 import pandas as pd
-from typing import List, Dict
-from database.connectors import MySQLConnector
-import sqlalchemy
-from sqlalchemy import text
-from chatbot.sql_generator import SQLGenerator
-from chatbot.query_executor import QueryExecutor
-import logging
 
 class ChatInterface:
     def __init__(self):
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
-        self.sql_generator = SQLGenerator()
-        self.query_executor = QueryExecutor()
-        self.connector = MySQLConnector()
-
-    def display_chat_history(self):
-        """Display the chat history and results"""
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"], avatar=message.get("avatar", message["role"])):
-                st.markdown(message["content"])
-                
-                # If there are results, display them
-                if "results" in message and not message["results"].empty:
-                    st.dataframe(
-                        message["results"],
-                        use_container_width=True,
-                        hide_index=True
-                    )
-
-    def process_query(self, query: str) -> tuple[str, pd.DataFrame]:
-        """Process natural language query and return SQL + results"""
-        try:
-            # Add loading state
-            with st.spinner('Procesando consulta...'):
-                # Generate SQL from natural language
-                sql = self.sql_generator.generate_sql(query)
-                
-                # Execute the query if valid
-                if sql and self.query_executor.validate_query(sql):
-                    results = self.query_executor.execute_query(sql)
-                    return (
-                        f"```sql\n{sql}\n```\n\nResultados encontrados: {len(results)} registros", 
-                        results
-                    )
-                else:
-                    return "No pude procesar esta consulta. ¿Podrías reformularla?", pd.DataFrame()
-                
-        except Exception as e:
-            logging.error(f"Query processing error: {str(e)}")
-            return "Lo siento, hubo un error procesando tu consulta.", pd.DataFrame()
-
-    def add_message(self, role: str, content: str, results: pd.DataFrame = None):
-        message = {
+        self.agent = ScrapingAgent()
+        
+    def add_message(self, role: str, content: str, data: Optional[pd.DataFrame] = None):
+        st.session_state.messages.append({
             "role": role,
-            "content": content
-        }
-        if results is not None and not results.empty:
-            message["results"] = results
-        st.session_state.messages.append(message)
-        # Force Streamlit to rerun and show the new message
-        st.experimental_rerun()
-
-    def clear_chat(self):
-        """Clear the chat history"""
-        st.session_state.messages = []
+            "content": content,
+            "data": data
+        })
+    
+    def process_query(self, query: str) -> Dict[str, Any]:
+        """Process query using agents"""
+        try:
+            response = self.agent.process_query(query)
+            return {
+                "success": True,
+                "response": response
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    def display_chat_history(self):
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+                if message.get("data") is not None:
+                    st.dataframe(message["data"])
