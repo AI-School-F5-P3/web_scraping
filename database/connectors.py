@@ -18,7 +18,8 @@ class MySQLConnector:
             pool_size=5,
             max_overflow=10,
             pool_timeout=30,
-            pool_recycle=3600
+            pool_recycle=1800,
+            pool_pre_ping=True  # Add connection testing
         )
         
         # Add this line to create tables if they don't exist
@@ -27,25 +28,26 @@ class MySQLConnector:
 
     @contextmanager
     def get_session(self, max_retries=3, retry_delay=5):
-        """Context manager for database sessions with retry logic"""
         session = self.SessionLocal()
         retries = 0
         
-        while retries < max_retries:
-            try:
-                yield session
-                session.commit()
-                return
-            except Exception as e:
+        try:
+            while retries < max_retries:
+                try:
+                    yield session
+                    session.commit()
+                    break
+                except Exception as e:
+                    session.rollback()
+                    if retries == max_retries - 1:
+                        raise
+                    retries += 1
+                    logger.warning(f"Retry {retries}/{max_retries} - Error: {str(e)}")
+                    time.sleep(retry_delay ** retries)
+        finally:
+            session.close()
+            if session.is_active:
                 session.rollback()
-                retries += 1
-                logger.error(f"Database error. Retrying in {retry_delay} seconds... (Attempt {retries}/{max_retries})")
-                logger.debug(str(e))
-                time.sleep(retry_delay)
-                if retries == max_retries:
-                    raise
-            finally:
-                session.close()
 
     def test_connection(self) -> bool:
         """Test database connectivity"""

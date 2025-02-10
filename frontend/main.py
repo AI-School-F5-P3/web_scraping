@@ -92,9 +92,11 @@ def render_sidebar(redis_client: redis.Redis):
         llm_provider = st.selectbox(
             "Seleccionar Modelo de Lenguaje:",
             ("DeepSeek", "OpenAI"),
-            index=0 if Config.LLM_PROVIDER == "DEEPSEEK" else 1,
-            help="Elija el proveedor para el motor de consultas analíticas"
+            index=0 if st.session_state.get("llm_provider", "DeepSeek") == "DeepSeek" else 1
         )
+
+        # Guardar selección en sesión
+        st.session_state.llm_provider = llm_provider
         
         # Scraping Options
         st.subheader("🔍 Opciones de Scraping")
@@ -157,26 +159,25 @@ def render_main_content(chat: ChatInterface, metrics: MetricsInterface, redis_cl
     
     with tab1:
         st.markdown("### Consultas en Lenguaje Natural")
-        chat_container = st.container()
         
-        with chat_container:
-            chat.display_chat_history()
+        # Display chat history first
+        chat.display_chat_history()
+        
+        # Then show the input box
+        query = st.chat_input("Escribe tu consulta (ej: 'Empresas en Madrid con ecommerce')", key="chat_input_tab1")
+        
+        if query:
+            # Add user message
+            chat.add_message("user", query)
             
-            # Query input
-            query = st.chat_input("Escribe tu consulta (ej: 'Empresas en Madrid con ecommerce')", key="chat_input_tab1")
-
-            if query:
-                # Add user message
-                chat.add_message("user", query)
+            # Process with agents
+            with st.spinner("Procesando consulta..."):
+                result = chat.process_query(query)
                 
-                # Process with agents
-                with st.spinner("Procesando consulta..."):
-                    result = chat.process_query(query)
-                    
-                    if result["success"]:
-                        chat.add_message("assistant", result["response"])
-                    else:
-                        chat.add_message("assistant", f"Error: {result['error']}")
+                if result["success"]:
+                    chat.add_message("assistant", result["response"])
+                else:
+                    chat.add_message("assistant", f"Error: {result['error']}")
     
     with tab2:
         st.markdown("## 📤 Carga y procesamiento de datos")
@@ -312,7 +313,7 @@ def main():
     
     # Initialize components
     redis_client = initialize_redis()
-    chat = ChatInterface()
+    chat = ChatInterface(st.session_state.llm_provider)
     metrics = MetricsInterface()
     data_processor = DataProcessorInterface()
     
