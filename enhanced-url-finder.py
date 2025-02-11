@@ -350,8 +350,9 @@ def verify_company_url(url, company_name, session):
         return False, None
 
 def generate_possible_urls(company_name):
-    """Generación mejorada de posibles URLs."""
+    print(f"\nGenerando URLs para: {company_name}")  # Nuevo
     clean_name = clean_company_name(company_name)
+    print(f"Nombre limpio: {clean_name}")  # Nuevo
     base_name = clean_name.replace('-', '')
     
     variations = [
@@ -364,18 +365,22 @@ def generate_possible_urls(company_name):
         f"{base_name}online",
         f"{base_name}web",
     ]
+    print(f"Intentando variaciones: {variations}")  # Nuevo
     
-    domains = ['.es', '.com', '.net', '.org', '.eu', '.com.es']
+    domains = ['.es', '.com', '.net', '.org', '.eu', '.com.es', '.cat', '.eus', '.gal']
     valid_domains = set()
     
     for variation in variations:
         for domain in domains:
             domain_to_check = f"{variation}{domain}"
+            print(f"Probando dominio: {domain_to_check}")  # Nuevo
             try:
                 dns.resolver.resolve(domain_to_check, 'A')
                 valid_domains.add(f"https://www.{domain_to_check}")
                 valid_domains.add(f"https://{domain_to_check}")
-            except:
+                print(f"✓ Dominio válido encontrado: {domain_to_check}")  # Nuevo
+            except Exception as e:  # Nuevo
+                print(f"✗ Dominio no válido: {domain_to_check}")  # Nuevo
                 continue
     
     return list(valid_domains)
