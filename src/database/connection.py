@@ -1,6 +1,6 @@
 import sqlalchemy as sa
 from sqlalchemy import create_engine, text
-#from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 
 def create_database(username, password, host, db_name):
