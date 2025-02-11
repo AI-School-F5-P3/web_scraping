@@ -62,30 +62,17 @@ class MySQLConnector:
     def bulk_insert_companies(self, data: List[Dict[str, Any]]) -> bool:
         try:
             with self.engine.connect() as conn:
-            # Use INSERT IGNORE to skip duplicates
+                # Add data validation
+                for item in data:
+                    if not all(k in item for k in ['NIF', 'RAZON_SOCIAL']):
+                        raise ValueError("Missing required fields in data")
+                
                 stmt = insert(empresas).prefix_with('IGNORE')
-                conn.execute(
-                    stmt,
-                    [
-                        {
-                            'codigo_infotel': item.get('COD_INFOTEL', ''),
-                            'nif': item.get('NIF', ''),
-                            'razon_social': item.get('RAZON_SOCIAL', ''),
-                            'direccion': item.get('DOMICILIO', ''),
-                            'codigo_postal': item.get('COD_POSTAL', ''),
-                            'poblacion': item.get('NOM_POBLACION', ''),
-                            'provincia': item.get('NOM_PROVINCIA', ''),
-                            'website': item.get('URL', ''),
-                            'url_valid': item.get('URL_VALID', False),
-                            'confidence_score': item.get('confidence_score', 100)
-                        }
-                        for item in data
-                    ]
-                )
+                result = conn.execute(stmt, data)
                 conn.commit()
                 return True
         except Exception as e:
-            logger.error(f"Bulk insert failed: {str(e)}")
+            logger.error(f"Bulk insert failed: {str(e)}\n{traceback.format_exc()}")
             return False
         
 def delete_companies(self, criteria: Dict[str, Any]) -> int:

@@ -24,6 +24,7 @@ from components.chat import ChatInterface
 from components.metrics import MetricsInterface
 from components.data_processor import DataProcessorInterface
 from scraper.manager import ScrapingManager
+from config import LLMProvider
 
 def initialize_redis() -> Optional[redis.Redis]:
     """Initialize Redis connection"""
@@ -47,7 +48,7 @@ def initialize_session_state():
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "llm_provider" not in st.session_state:
-        st.session_state.llm_provider = Config.LLM_PROVIDER
+        st.session_state.llm_provider = Config.LLM_PROVIDER.value
     if "scraping_active" not in st.session_state:
         st.session_state.scraping_active = False
 
@@ -89,14 +90,26 @@ def render_sidebar(redis_client: redis.Redis):
         st.header("⚙️ Configuración del Sistema")
         
         # LLM Provider selector
-        llm_provider = st.selectbox(
+        current_provider = LLMProvider.from_string(st.session_state.get("llm_provider", "deepseek"))
+        provider_options = {
+            "DeepSeek": LLMProvider.DEEPSEEK,
+            "OpenAI": LLMProvider.OPENAI
+        }
+        
+        selected_provider_name = st.selectbox(
             "Seleccionar Modelo de Lenguaje:",
-            ("DeepSeek", "OpenAI"),
-            index=0 if st.session_state.get("llm_provider", "DeepSeek") == "DeepSeek" else 1
+            list(provider_options.keys()),
+            index=list(provider_options.values()).index(current_provider)
         )
+        
+        # Update session state with the enum value's name
+        selected_provider = provider_options[selected_provider_name]
+        if selected_provider != current_provider:
+            st.session_state.llm_provider = selected_provider.name
+            st.rerun()
 
         # Guardar selección en sesión
-        st.session_state.llm_provider = llm_provider
+        st.session_state.llm_provider = LLMProvider
         
         # Scraping Options
         st.subheader("🔍 Opciones de Scraping")

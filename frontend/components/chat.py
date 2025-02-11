@@ -9,10 +9,14 @@ logger = logging.getLogger(__name__)
 
 class ChatInterface:
     def __init__(self, llm_provider: str):
-        self.llm_provider = llm_provider
-        self.agent = ScrapingAgent()
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
+        try:
+            self.llm_provider = llm_provider
+            self.agent = ScrapingAgent(llm_provider)
+            if "messages" not in st.session_state:
+                st.session_state.messages = []
+        except Exception as e:
+            logger.error(f"Failed to initialize ChatInterface: {str(e)}\n{traceback.format_exc()}")
+            raise
         
     def add_message(self, role: str, content: str, data: Optional[pd.DataFrame] = None):
         """Add a message to the chat history"""
@@ -30,16 +34,29 @@ class ChatInterface:
         })
     
     def process_query(self, query: str, max_retries: int = 3) -> Dict[str, Any]:
-        """Process query using agents with retries"""
+        """Process query using agents with retries and better error handling"""
+        if not query or len(query.strip()) < 3:
+            return {"success": False, "error": "Query too short"}
+            
+        last_error = None
         for attempt in range(max_retries):
             try:
                 result = self.agent.process_query(query)
+                if not result:
+                    raise ValueError("Empty result from agent")
                 return result
             except Exception as e:
-                if attempt == max_retries - 1:
-                    logger.error(f"Failed after {max_retries} attempts: {str(e)}")
-                    return {"success": False, "error": str(e)}
-                time.sleep(2 ** attempt)  # Exponential backoff
+                last_error = e
+                logger.warning(f"Attempt {attempt + 1} failed: {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                
+                logger.error(f"All attempts failed: {str(e)}\n{traceback.format_exc()}")
+                return {
+                    "success": False,
+                    "error": f"Error processing query: {str(last_error)}"
+                }
     
     def clear_history(self):
         """Clear chat history"""

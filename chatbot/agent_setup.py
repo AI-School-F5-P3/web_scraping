@@ -1,35 +1,17 @@
 # chatbot/agent_setup.py
-from typing import Dict, Any, Optional, Callable, List
+from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
 from crewai import Agent, Crew, Process, Task
 from chatbot.query_executor import QueryExecutor
-from config import Config
-import streamlit as st
 from chatbot.sql_generator import SQLGenerator
-from datetime import datetime
-from langchain_community.llms import Ollama  # Para modelos locales
-from langchain_openai import ChatOpenAI     # Para OpenAI
-from langchain.tools import tool
-import time
+from config import Config
 import logging
-logger = logging.getLogger(__name__)
+from datetime import datetime
+from langchain_ollama import ChatOllama
+from langchain.tools import Tool
+import time
 
-def get_llm():
-    """Get the appropriate LLM based on provider selection"""
-    if st.session_state.llm_provider == "DeepSeek":
-        # Use langchain's built-in Ollama wrapper instead of direct Ollama
-        return Ollama(
-            model="deepseek-r1",
-            base_url=Config.OLLAMA_BASE_URL,
-            temperature=0.7,
-            stop=["\n"]  # Add stop sequence
-        )
-    else:  # OpenAI
-        return ChatOpenAI(
-            model="gpt-4",
-            api_key=Config.OPENAI_API_KEY,
-            temperature=0.7
-        )
+logger = logging.getLogger(__name__)
 
 class DatabaseSearchOutput(BaseModel):
     results: str
@@ -41,16 +23,41 @@ class AnalysisOutput(BaseModel):
     insights: List[str] = Field(default_factory=list, description="Key insights extracted")
     recommendations: List[str] = Field(default_factory=list, description="Recommendations based on analysis")
 
+def get_llm(llm_provider: str):
+    if llm_provider == "DeepSeek":
+        try:
+            # Initialize ChatOllama with explicit model name
+            llm = ChatOllama(
+                model="deepseek-r1:1.5b",  # or your installed model name
+                base_url=Config.OLLAMA_BASE_URL,
+                temperature=0.7,
+            )
+            # Test the LLM with a simple query
+            try:
+                llm.invoke("test")
+                return llm
+            except Exception as e:
+                logger.error(f"LLM test failed: {str(e)}")
+                raise
+        except Exception as e:
+            logger.error(f"LLM initialization error: {str(e)}")
+            # Return a more specific error rather than falling back
+            raise RuntimeError(f"Failed to initialize LLM: {str(e)}")
+    else:
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model_name="gpt-4",
+            api_key=Config.OPENAI_API_KEY,
+            temperature=0.7
+        )
+
 class DatabaseTool:
     def __init__(self):
-        self.name = "database_search"
-        self.description = "Searches the company database for relevant information based on the query"
         self.query_executor = QueryExecutor()
         self.sql_generator = SQLGenerator()
-        
-    @tool
+    
     def database_search(self, query: str) -> str:
-        """Execute database search and return results"""
+        """Search company database with natural language query"""
         try:
             sql_query = self.sql_generator.generate_sql(query)
             if self.query_executor.validate_query(sql_query):
@@ -58,40 +65,28 @@ class DatabaseTool:
                 return df.to_string()
             return "Invalid query"
         except Exception as e:
-            return f"Error: {str(e)}"
-        
-    def func(self, query: str) -> str:
-        """Execute database search and return results"""
-        try:
-            # Convert natural language to SQL using SQLGenerator
-            sql_query = self.sql_generator.generate_sql(query)
-            
-            # Validate the generated query
-            if self.query_executor.validate_query(sql_query):
-                df = self.query_executor.execute_query(sql_query)
-                return df.to_string()
-            return "Invalid query"
-        except Exception as e:
+            logger.error(f"Database search error: {str(e)}")
             return f"Error executing query: {str(e)}"
 
-class QueryResponse(BaseModel):
-    description: str = Field(..., description="Query description")
-    response: str = Field(..., description="Generated response")
-    data: Optional[Dict[str, Any]] = Field(None, description="Additional data")
-
 class ScrapingAgent:
-    def __init__(self):
-        self.llm = get_llm()
+    def __init__(self, llm_provider: str):
+        self.llm = get_llm(llm_provider)
         self.db_tool = DatabaseTool()
-        self.agents = self.create_agents()  # Crear agentes al inicializar
-        self.tasks = []  # Tareas se crearán dinámicamente
+        self.agents = self.create_agents()
+        self.tasks = []
         
     def create_agents(self) -> List[Agent]:
+        # Create a proper Tool instance
+        db_search_tool = Tool(
+            name="database_search",
+            func=self.db_tool.database_search,
+            description="Search company database with natural language query"
+        )
         retriever_agent = Agent(
             role="Database Information Retriever",
             goal="Retrieve accurate information from the company database",
             backstory="Expert at querying company information from databases",
-            tools=[self.db_tool.database_search], 
+            tools=[db_search_tool], 
             llm=self.llm,
             verbose=True
         )
@@ -105,42 +100,37 @@ class ScrapingAgent:
         )
         
         return [retriever_agent, analyzer_agent]
-        
+    
     def create_tasks(self, agents: List[Agent], query: str) -> List[Task]:
         retrieval_task = Task(
             description=f"Find relevant company information for: {query}",
             agent=agents[0],
-            expected_output="A detailed response with the requested company information from the database",
-            output_json=DatabaseSearchOutput
+            expected_output="string"  # Changed from DatabaseSearchOutput to "string"
         )
         
         analysis_task = Task(
             description=f"Analyze and synthesize information for: {query}",
             agent=agents[1],
-            expected_output="An analysis of the company information with insights and patterns",
-            output_json=AnalysisOutput
+            expected_output="string"  # Changed from AnalysisOutput to "string"
         )
         
         return [retrieval_task, analysis_task]
         
     def process_query(self, query: str) -> Dict[str, Any]:
         try:
-            # Validación inicial
             if not query or len(query.strip()) < 3:
                 return {"success": False, "error": "Query too short"}
 
-            # Crear tareas dinámicamente para cada query
             self.tasks = self.create_tasks(self.agents, query)
             
-            # Configurar y ejecutar el Crew
             crew = Crew(
                 agents=self.agents,
                 tasks=self.tasks,
-                process=Process.sequential,  # Proceso secuencial
+                process=Process.sequential,
                 verbose=True
             )
             
-            result = crew.kickoff()  # Ejecutar el flujo
+            result = crew.kickoff()
             
             return {
                 "success": True,
@@ -148,5 +138,5 @@ class ScrapingAgent:
             }
             
         except Exception as e:
-            logger.error(f"Error: {str(e)}")
+            logger.error(f"Error processing query: {str(e)}")
             return {"success": False, "error": str(e)}
