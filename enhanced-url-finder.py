@@ -151,6 +151,79 @@ def get_page_content(url, session):
     except Exception as e:
         print(f"Error accediendo a {url}: {str(e)}")
         return None
+def detect_ecommerce(soup):
+    """Detecta si una web tiene comercio electrónico."""
+    # Lista de indicadores de ecommerce
+    ecommerce_indicators = {
+        'carrito_compra': [
+            'carrito', 'cart', 'cesta', 'basket', 'shopping', 'comprar'
+        ],
+        'botones_compra': [
+            'añadir al carrito', 'add to cart', 'comprar ahora', 'buy now',
+            'realizar pedido', 'checkout', 'agregar al carrito', 'comprar'
+        ],
+        'precios': [
+            '€', 'eur', 'euros', 'precio', 'price', 'pvp'
+        ],
+        'elementos_tienda': [
+            'tienda', 'shop', 'store', 'catálogo', 'catalog', 'productos', 'products'
+        ]
+    }
+    
+    score = 0
+    evidence = []
+    
+    # Buscar en enlaces
+    for link in soup.find_all('a', string=True):
+        text = link.get_text().lower()
+        href = link.get('href', '').lower()
+        
+        # Buscar indicadores en texto y href
+        for category, indicators in ecommerce_indicators.items():
+            for indicator in indicators:
+                if indicator in text or indicator in href:
+                    score += 1
+                    evidence.append(f"Enlace encontrado: {text if text else href}")
+                    break
+    
+    # Buscar formularios de compra
+    forms = soup.find_all('form')
+    for form in forms:
+        action = form.get('action', '').lower()
+        if any(term in action for term in ['cart', 'checkout', 'payment', 'compra', 'pago']):
+            score += 2
+            evidence.append(f"Formulario de compra encontrado: {action}")
+    
+    # Buscar elementos con clases/IDs típicos de ecommerce
+    ecommerce_classes = ['cart', 'checkout', 'basket', 'shop', 'store', 'product', 'price']
+    for class_name in ecommerce_classes:
+        elements = soup.find_all(class_=re.compile(class_name))
+        if elements:
+            score += 1
+            evidence.append(f"Elementos con clase '{class_name}' encontrados")
+    
+    # Buscar símbolos de moneda y precios
+    price_pattern = r'(?:€|EUR)\s*\d+(?:[.,]\d{2})?|\d+(?:[.,]\d{2})?\s*(?:€|EUR)'
+    text_content = soup.get_text()
+    prices = re.findall(price_pattern, text_content, re.IGNORECASE)
+    if prices:
+        score += 2
+        evidence.append(f"Precios encontrados: {len(prices)} ocurrencias")
+    
+    # Buscar meta tags relacionados con ecommerce
+    meta_tags = soup.find_all('meta')
+    for tag in meta_tags:
+        content = tag.get('content', '').lower()
+        name = tag.get('name', '').lower()
+        if any(term in content or term in name for term in ['shop', 'store', 'product', 'ecommerce']):
+            score += 1
+            evidence.append(f"Meta tag de ecommerce encontrado: {name}")
+    
+    is_ecommerce = score >= 5
+    return is_ecommerce, {
+        'score': score,
+        'evidence': evidence
+    }
 
 def verify_company_url(url, company_name, session):
     """Verificación mejorada de URLs de empresa."""
@@ -170,13 +243,56 @@ def verify_company_url(url, company_name, session):
             'contact_page': bool(soup.find('a', string=re.compile(r'contacto|contact', re.I))),
         }
         
-        # Extraer y limitar teléfonos
-        phones = re.findall(r'(?:\+34|0034|34)?[\s-]?[6789]\d{8}', content)
-        # Eliminar duplicados y limitar a 3
-        phones = list(dict.fromkeys(phones))[:3]
-        data['phones'] = phones
+        # Detectar ecommerce
+        is_ecommerce, ecommerce_data = detect_ecommerce(soup)
+        data['has_ecommerce'] = is_ecommerce
+        data['ecommerce_data'] = ecommerce_data
         
-        # Extraer links de redes sociales
+        # Mejorada la extracción de teléfonos
+        phones = set()  # Usamos set para evitar duplicados automáticamente
+        
+        # 1. Buscar enlaces tipo tel:
+        tel_links = soup.find_all('a', href=re.compile(r'^tel:'))
+        for link in tel_links:
+            href = link.get('href', '')
+            phone = re.sub(r'[^\d+]', '', href.replace('tel:', ''))
+            if phone.startswith('+'):
+                phones.add(phone)
+            elif phone.startswith('34'):
+                phones.add(f"+{phone}")
+            elif len(phone) == 9:  # Número español sin prefijo
+                phones.add(f"+34{phone}")
+        
+        # 2. Buscar en el texto con patrón mejorado
+        phone_pattern = r'(?:\+34|0034|34)?[\s-]?(?:[\s-]?\d){9}'
+        
+        # Buscar teléfonos en elementos de texto
+        for element in soup.find_all(['p', 'div', 'span', 'a']):
+            if element.string:
+                found_phones = re.findall(phone_pattern, element.string)
+                for phone in found_phones:
+                    clean_phone = re.sub(r'[^\d]', '', phone)
+                    if len(clean_phone) == 9:
+                        phones.add(f"+34{clean_phone}")
+                    elif len(clean_phone) > 9:
+                        phones.add(f"+{clean_phone}")
+        
+        # 3. Buscar en atributos data-* que podrían contener teléfonos
+        for element in soup.find_all(attrs=re.compile(r'^data-')):
+            for attr_name, attr_value in element.attrs.items():
+                if isinstance(attr_value, str):  # Asegurarse de que el valor es string
+                    found_phones = re.findall(phone_pattern, attr_value)
+                    for phone in found_phones:
+                        clean_phone = re.sub(r'[^\d]', '', phone)
+                        if len(clean_phone) == 9:
+                            phones.add(f"+34{clean_phone}")
+                        elif len(clean_phone) > 9:
+                            phones.add(f"+{clean_phone}")
+        
+        # Convertir el set a lista y limitar a 3 teléfonos
+        data['phones'] = list(phones)[:3]
+        
+        # Mejorar la extracción de links de redes sociales
         social_links = {
             'facebook': '',
             'twitter': '',
@@ -185,19 +301,28 @@ def verify_company_url(url, company_name, session):
             'youtube': ''
         }
         
+        # Patrones mejorados para redes sociales
+        social_patterns = {
+            'facebook': r'facebook\.com/(?!sharer|share)([^/?&]+)',
+            'twitter': r'twitter\.com/(?!share|intent)([^/?&]+)',
+            'instagram': r'instagram\.com/([^/?&]+)',
+            'linkedin': r'linkedin\.com/(?:company|in)/([^/?&]+)',
+            'youtube': r'youtube\.com/(?:user|channel|c)/([^/?&]+)'
+        }
+        
         # Buscar enlaces de redes sociales
         for link in soup.find_all('a', href=True):
             href = link['href'].lower()
-            if 'facebook.com' in href:
-                social_links['facebook'] = href
-            elif 'twitter.com' in href or 'x.com' in href:
-                social_links['twitter'] = href
-            elif 'instagram.com' in href:
-                social_links['instagram'] = href
-            elif 'linkedin.com' in href:
-                social_links['linkedin'] = href
-            elif 'youtube.com' in href:
-                social_links['youtube'] = href
+            
+            # Ignorar links de compartir
+            if 'sharer' in href or 'share?' in href or 'intent/tweet' in href:
+                continue
+                
+            for network, pattern in social_patterns.items():
+                if network in href:
+                    match = re.search(pattern, href)
+                    if match:
+                        social_links[network] = href
         
         data['social_links'] = social_links
         
@@ -221,6 +346,7 @@ def verify_company_url(url, company_name, session):
         return score >= 60, data
         
     except Exception as e:
+        print(f"Error en verify_company_url: {str(e)}")
         return False, None
 
 def generate_possible_urls(company_name):
@@ -331,6 +457,9 @@ def process_excel(file_path, url_column='URL'):
     df['LinkedIn'] = ''
     df['YouTube'] = ''
     df['Info_Adicional'] = ''
+    df['Tiene_Ecommerce'] = False
+    df['Ecommerce_Score'] = 0
+    df['Ecommerce_Evidencia'] = ''
     
     print("\nProcesando URLs...")
     for idx, row in tqdm(df.iterrows(), total=len(df), desc="Verificando empresas"):
@@ -372,13 +501,24 @@ def process_excel(file_path, url_column='URL'):
                     'youtube': ''
                 }
                 
+                # Variables para ecommerce
+                has_ecommerce = False
+                max_ecommerce_score = 0
+                all_evidence = []
+                
                 for data in verification_data.values():
                     if 'phones' in data:
                         all_phones.extend(data['phones'])
                     if 'social_links' in data:
                         for network, link in data['social_links'].items():
-                            if link and not social_links[network]:  # Tomar el primer link válido encontrado
+                            if link and not social_links[network]:
                                 social_links[network] = link
+                    if 'has_ecommerce' in data:
+                        if data['has_ecommerce']:
+                            has_ecommerce = True
+                        if data['ecommerce_data']['score'] > max_ecommerce_score:
+                            max_ecommerce_score = data['ecommerce_data']['score']
+                        all_evidence.extend(data['ecommerce_data']['evidence'])
                 
                 # Asignar teléfonos (limitados a 3)
                 unique_phones = list(dict.fromkeys(all_phones))[:3]
@@ -392,6 +532,11 @@ def process_excel(file_path, url_column='URL'):
                 df.at[idx, 'LinkedIn'] = social_links['linkedin']
                 df.at[idx, 'YouTube'] = social_links['youtube']
                 
+                # Asignar información de ecommerce
+                df.at[idx, 'Tiene_Ecommerce'] = has_ecommerce
+                df.at[idx, 'Ecommerce_Score'] = max_ecommerce_score
+                df.at[idx, 'Ecommerce_Evidencia'] = '; '.join(all_evidence)
+                
                 # Intentar obtener información WHOIS
                 try:
                     whois_info = get_whois_info(valid_urls[0].split('/')[2])
@@ -399,6 +544,7 @@ def process_excel(file_path, url_column='URL'):
                         df.at[idx, 'Info_Adicional'] = json.dumps(whois_info, default=str)
                 except:
                     pass
+                    
         except KeyboardInterrupt:
             print("\nGuardando progreso antes de salir...")
             output_file = os.path.splitext(file_path)[0] + '_procesado3.xlsx'
@@ -408,11 +554,7 @@ def process_excel(file_path, url_column='URL'):
             print(f"Error procesando empresa {idx + 1}: {str(e)}")
             continue
     
-    output_file = os.path.splitext(file_path)[0] + '_procesado3.xlsx'
-    df.to_excel(output_file, index=False, engine='openpyxl')
-    return output_file
-    
-    output_file = os.path.splitext(file_path)[0] + '_procesado3.xlsx'
+    output_file = os.path.splitext(file_path)[0] + '_procesado_con500b.xlsx'
     try:
         df.to_excel(output_file, index=False, engine='openpyxl')
         return output_file
