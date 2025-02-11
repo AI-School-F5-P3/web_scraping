@@ -5,6 +5,8 @@ from chatbot.agent_setup import ScrapingAgent
 import pandas as pd
 import time
 import logging
+import traceback
+
 logger = logging.getLogger(__name__)
 
 class ChatInterface:

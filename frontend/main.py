@@ -48,7 +48,7 @@ def initialize_session_state():
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "llm_provider" not in st.session_state:
-        st.session_state.llm_provider = Config.LLM_PROVIDER.value
+        st.session_state.llm_provider = Config.LLM_PROVIDER
     if "scraping_active" not in st.session_state:
         st.session_state.scraping_active = False
 
@@ -90,10 +90,10 @@ def render_sidebar(redis_client: redis.Redis):
         st.header("⚙️ Configuración del Sistema")
         
         # LLM Provider selector
-        current_provider = LLMProvider.from_string(st.session_state.get("llm_provider", "deepseek"))
+        current_provider = st.session_state.get("llm_provider", "deepseek")
         provider_options = {
-            "DeepSeek": LLMProvider.DEEPSEEK,
-            "OpenAI": LLMProvider.OPENAI
+            "DeepSeek": "deepseek",
+            "OpenAI": "openai"
         }
         
         selected_provider_name = st.selectbox(
@@ -102,14 +102,14 @@ def render_sidebar(redis_client: redis.Redis):
             index=list(provider_options.values()).index(current_provider)
         )
         
-        # Update session state with the enum value's name
+        # Store the value, not the enum
         selected_provider = provider_options[selected_provider_name]
         if selected_provider != current_provider:
-            st.session_state.llm_provider = selected_provider.name
+            st.session_state.llm_provider = selected_provider
             st.rerun()
 
         # Guardar selección en sesión
-        st.session_state.llm_provider = LLMProvider
+        # st.session_state.llm_provider = LLMProvider
         
         # Scraping Options
         st.subheader("🔍 Opciones de Scraping")

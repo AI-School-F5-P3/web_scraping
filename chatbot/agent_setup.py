@@ -70,7 +70,7 @@ class DatabaseTool:
 
 class ScrapingAgent:
     def __init__(self, llm_provider: str):
-        self.llm = get_llm(llm_provider)
+        self.llm = get_llm(llm_provider)  # Pass the string directly
         self.db_tool = DatabaseTool()
         self.agents = self.create_agents()
         self.tasks = []

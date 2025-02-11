@@ -10,22 +10,20 @@ logger = logging.getLogger(__name__)
 
 class LLMManager:
     @staticmethod
-    def get_llm(provider: Optional[Union[str, LLMProvider]] = None) -> BaseLanguageModel:
-        """Get LLM instance based on provider"""
-        # Convert string to enum if string provided
-        if isinstance(provider, str):
-            provider = LLMProvider.from_string(provider)
-        else:
-            provider = provider or Config.LLM_PROVIDER
-            
+    def get_llm(provider: Optional[str] = None) -> BaseLanguageModel:
+        """Get LLM instance based on provider string"""
         try:
-            if provider == LLMProvider.DEEPSEEK:
+            # Use provided provider or default from config
+            provider_str = provider or Config.LLM_PROVIDER
+            provider_enum = LLMProvider.from_string(provider_str)
+            
+            if provider_enum == LLMProvider.DEEPSEEK:
                 return ChatOllama(
                     model=Config.OLLAMA_MODEL,
                     base_url=Config.OLLAMA_BASE_URL,
                     temperature=0.7
                 )
-            elif provider == LLMProvider.OPENAI:
+            elif provider_enum == LLMProvider.OPENAI:
                 if not Config.OPENAI_API_KEY:
                     raise ValueError("OpenAI API key not configured")
                 return ChatOpenAI(
@@ -34,7 +32,7 @@ class LLMManager:
                     temperature=0.7
                 )
             else:
-                raise ValueError(f"Unsupported LLM provider: {provider}")
+                raise ValueError(f"Unsupported LLM provider: {provider_str}")
         except Exception as e:
             logger.error(f"Failed to initialize LLM: {str(e)}")
             raise

@@ -13,10 +13,15 @@ class LLMProvider(Enum):
     def from_string(cls, value: str) -> 'LLMProvider':
         """Convert string to enum value, case-insensitive"""
         try:
-            return cls[value.upper()]
-        except KeyError:
-            # Default to DEEPSEEK if invalid value
-            return cls.DEEPSEEK
+            value = value.upper()
+            if value == "DEEPSEEK":
+                return cls.DEEPSEEK
+            elif value == "OPENAI":
+                return cls.OPENAI
+            else:
+                return cls.DEEPSEEK  # Default
+        except (AttributeError, KeyError):
+            return cls.DEEPSEEK  # Default if conversion fails
 
 class Config:
     # Database configs
@@ -36,7 +41,7 @@ class Config:
     )
     
     # LLM Configuration
-    LLM_PROVIDER = LLMProvider.from_string(os.getenv("LLM_PROVIDER", "deepseek"))
+    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek")  # Store as string
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "deepseek-r1:1.5b")
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4")

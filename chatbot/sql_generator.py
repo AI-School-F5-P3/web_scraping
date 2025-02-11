@@ -11,7 +11,9 @@ logger = logging.getLogger(__name__)
 class SQLGenerator:
     def __init__(self):
         try:
-            self.llm = LLMManager.get_llm(st.session_state.get("llm_provider"))
+            # Get provider string from session state or config
+            provider = st.session_state.get("llm_provider", Config.LLM_PROVIDER)
+            self.llm = LLMManager.get_llm(provider)
         except Exception as e:
             logger.error(f"Failed to initialize LLM in SQLGenerator: {str(e)}")
             raise
