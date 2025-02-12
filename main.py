@@ -26,7 +26,7 @@ def main():
     create_table(engine)
 
     # Process Excel file and insert data
-    df = validate_and_prepare_dataframe('Muestra50K_Telefonos_20250204.xlsx')
+    df = validate_and_prepare_dataframe('Muestra50K_Telefonos_20250114.xlsx')
     
     # Insert data and process URLs
     process_urls(engine, db_name, df)
