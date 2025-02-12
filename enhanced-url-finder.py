@@ -350,9 +350,8 @@ def verify_company_url(url, company_name, session):
         return False, None
 
 def generate_possible_urls(company_name):
-    print(f"\nGenerando URLs para: {company_name}")  # Nuevo
+    """Generación mejorada de posibles URLs."""
     clean_name = clean_company_name(company_name)
-    print(f"Nombre limpio: {clean_name}")  # Nuevo
     base_name = clean_name.replace('-', '')
     
     variations = [
@@ -365,22 +364,18 @@ def generate_possible_urls(company_name):
         f"{base_name}online",
         f"{base_name}web",
     ]
-    print(f"Intentando variaciones: {variations}")  # Nuevo
     
-    domains = ['.es', '.com', '.net', '.org', '.eu', '.com.es', '.cat', '.eus', '.gal']
+    domains = ['.es', '.com', '.net', '.org', '.cat', '.eus', '.gal']
     valid_domains = set()
     
     for variation in variations:
         for domain in domains:
             domain_to_check = f"{variation}{domain}"
-            print(f"Probando dominio: {domain_to_check}")  # Nuevo
             try:
                 dns.resolver.resolve(domain_to_check, 'A')
                 valid_domains.add(f"https://www.{domain_to_check}")
                 valid_domains.add(f"https://{domain_to_check}")
-                print(f"✓ Dominio válido encontrado: {domain_to_check}")  # Nuevo
-            except Exception as e:  # Nuevo
-                print(f"✗ Dominio no válido: {domain_to_check}")  # Nuevo
+            except:
                 continue
     
     return list(valid_domains)
@@ -552,7 +547,7 @@ def process_excel(file_path, url_column='URL'):
                     
         except KeyboardInterrupt:
             print("\nGuardando progreso antes de salir...")
-            output_file = os.path.splitext(file_path)[0] + '_procesado3.xlsx'
+            output_file = os.path.splitext(file_path)[0] + '_procesado_100b.xlsx'
             df.to_excel(output_file, index=False, engine='openpyxl')
             sys.exit(0)
         except Exception as e:
