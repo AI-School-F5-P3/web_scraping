@@ -225,8 +225,8 @@ def detect_ecommerce(soup):
         'evidence': evidence
     }
 
-def verify_company_url(url, company_name, session):
-    """Verificación mejorada de URLs de empresa."""
+def verify_company_url(url, company_name, provincia, codigo_postal, session):
+    """Verificación mejorada de URLs de empresa con énfasis en ubicación."""
     content = get_page_content(url, session)
     if not content:
         return False, None
@@ -241,6 +241,7 @@ def verify_company_url(url, company_name, session):
                 if soup.find('meta', {'name': 'description'}) else '',
             'h1': ' '.join([h1.text.lower() for h1 in soup.find_all('h1')]),
             'contact_page': bool(soup.find('a', string=re.compile(r'contacto|contact', re.I))),
+            'all_text': soup.get_text().lower()  # Añadimos todo el texto para buscar ubicación
         }
         
         # Detectar ecommerce
@@ -249,48 +250,94 @@ def verify_company_url(url, company_name, session):
         data['ecommerce_data'] = ecommerce_data
         
         # Mejorada la extracción de teléfonos
-        phones = set()  # Usamos set para evitar duplicados automáticamente
+        phones = set()  # Usamos set para evitar duplicados
+        
+        def is_valid_spanish_phone(phone):
+            """Valida que un número sea un teléfono español válido."""
+            # Limpiamos el número de cualquier carácter no numérico
+            clean_phone = re.sub(r'[^\d+]', '', phone)
+            
+            # Si empieza con +34 o 0034, lo removemos para validar solo los 9 dígitos
+            if clean_phone.startswith('+34'):
+                clean_phone = clean_phone[3:]
+            elif clean_phone.startswith('0034'):
+                clean_phone = clean_phone[4:]
+            elif clean_phone.startswith('34'):
+                clean_phone = clean_phone[2:]
+                
+            # Validar que sea un número español válido:
+            # - Debe tener exactamente 9 dígitos
+            # - Debe empezar por 6, 7, 8 o 9
+            return (len(clean_phone) == 9 and 
+                   clean_phone[0] in '6789')
+        
+        def clean_and_format_phone(phone):
+            """Limpia y formatea un número de teléfono."""
+            clean_phone = re.sub(r'[^\d+]', '', phone)
+            if not clean_phone:
+                return None
+                
+            # Manejar diferentes formatos de prefijo
+            if clean_phone.startswith('+34'):
+                clean_phone = clean_phone[3:]
+            elif clean_phone.startswith('0034'):
+                clean_phone = clean_phone[4:]
+            elif clean_phone.startswith('34'):
+                clean_phone = clean_phone[2:]
+                
+            # Si el número tiene 9 dígitos y es válido, añadir prefijo
+            if len(clean_phone) == 9 and clean_phone[0] in '6789':
+                return f"+34{clean_phone}"
+            return None
         
         # 1. Buscar enlaces tipo tel:
         tel_links = soup.find_all('a', href=re.compile(r'^tel:'))
         for link in tel_links:
             href = link.get('href', '')
-            phone = re.sub(r'[^\d+]', '', href.replace('tel:', ''))
-            if phone.startswith('+'):
-                phones.add(phone)
-            elif phone.startswith('34'):
-                phones.add(f"+{phone}")
-            elif len(phone) == 9:  # Número español sin prefijo
-                phones.add(f"+34{phone}")
+            formatted_phone = clean_and_format_phone(href.replace('tel:', ''))
+            if formatted_phone:
+                phones.add(formatted_phone)
         
-        # 2. Buscar en el texto con patrón mejorado
-        phone_pattern = r'(?:\+34|0034|34)?[\s-]?(?:[\s-]?\d){9}'
+        # 2. Buscar en el texto con patrones mejorados
+        # Varios patrones para diferentes formatos
+        phone_patterns = [
+            # Patrón para móviles y fijos con prefijo
+            r'(?:\+34|0034|34)?[\s-]?[6789]\d{2}[\s-]?(?:\d{2}[\s-]?){3}',
+            # Patrón específico para fijos con formato XXX XX XX XX
+            r'[9]\d{2}[\s-]?\d{2}[\s-]?\d{2}[\s-]?\d{2}',
+            # Patrón para números escritos con palabras "Teléfono" o "Tel" cerca
+            r'(?:(?:Tel[eé]fono|Tel)[\s:.-]+)?(?:\+34|0034|34)?[\s-]?[6789]\d{2}[\s-]?(?:\d{2}[\s-]?){3}'
+        ]
         
         # Buscar teléfonos en elementos de texto
         for element in soup.find_all(['p', 'div', 'span', 'a']):
             if element.string:
-                found_phones = re.findall(phone_pattern, element.string)
-                for phone in found_phones:
-                    clean_phone = re.sub(r'[^\d]', '', phone)
-                    if len(clean_phone) == 9:
-                        phones.add(f"+34{clean_phone}")
-                    elif len(clean_phone) > 9:
-                        phones.add(f"+{clean_phone}")
+                text = element.string.strip()
+                for pattern in phone_patterns:
+                    found_phones = re.finditer(pattern, text, re.IGNORECASE)
+                    for match in found_phones:
+                        phone = match.group()
+                        formatted_phone = clean_and_format_phone(phone)
+                        if formatted_phone:
+                            phones.add(formatted_phone)
         
-        # 3. Buscar en atributos data-* que podrían contener teléfonos
-        for element in soup.find_all(attrs=re.compile(r'^data-')):
-            for attr_name, attr_value in element.attrs.items():
-                if isinstance(attr_value, str):  # Asegurarse de que el valor es string
-                    found_phones = re.findall(phone_pattern, attr_value)
-                    for phone in found_phones:
-                        clean_phone = re.sub(r'[^\d]', '', phone)
-                        if len(clean_phone) == 9:
-                            phones.add(f"+34{clean_phone}")
-                        elif len(clean_phone) > 9:
-                            phones.add(f"+{clean_phone}")
+        # 3. Buscar en todo el texto de la página para casos especiales
+        full_text = soup.get_text()
+        # Buscar específicamente después de la palabra "Teléfono" o "Tel"
+        tel_sections = re.finditer(r'(?:Tel[eé]fono|Tel)[:\s.-]+([^<>\n]{1,50})', full_text, re.IGNORECASE)
+        for section in tel_sections:
+            text_after_tel = section.group(1)
+            for pattern in phone_patterns:
+                found_phones = re.finditer(pattern, text_after_tel)
+                for match in found_phones:
+                    phone = match.group()
+                    formatted_phone = clean_and_format_phone(phone)
+                    if formatted_phone:
+                        phones.add(formatted_phone)
         
         # Convertir el set a lista y limitar a 3 teléfonos
         data['phones'] = list(phones)[:3]
+        
         
         # Mejorar la extracción de links de redes sociales
         social_links = {
@@ -326,24 +373,57 @@ def verify_company_url(url, company_name, session):
         
         data['social_links'] = social_links
         
-        # Calcular puntuación
+        # Calcular puntuación con nuevos criterios
+        score = 0
+        text_to_search = f"{data['title']} {data['meta_description']} {data['h1']} {data['all_text']}"
+        
+        # 1. Búsqueda de provincia (40 puntos máximo)
+        provincia = provincia.lower() if isinstance(provincia, str) else ''
+        if provincia and provincia in text_to_search:
+            score += 40
+            data['found_provincia'] = True
+        else:
+            data['found_provincia'] = False
+            
+        # 2. Búsqueda de código postal (20 puntos máximo)
+        # Asegurarnos de que el código postal tenga 5 dígitos
+        if isinstance(codigo_postal, (int, float)):
+            codigo_postal = str(int(codigo_postal)).zfill(5)
+        elif isinstance(codigo_postal, str):
+            codigo_postal = codigo_postal.zfill(5)
+        
+        if codigo_postal and codigo_postal in text_to_search:
+            score += 20
+            data['found_codigo_postal'] = True
+        else:
+            data['found_codigo_postal'] = False
+        
+        # 3. Búsqueda del nombre de la empresa (20 puntos máximo)
         search_terms = clean_company_name(company_name).split('-')
         search_terms = [term for term in search_terms if len(term) > 2]
+        if search_terms:
+            matches = sum(1 for term in search_terms if term in text_to_search)
+            score += (matches / len(search_terms)) * 20
         
-        score = 0
-        text_to_search = f"{data['title']} {data['meta_description']} {data['h1']}"
-        
-        matches = sum(1 for term in search_terms if term in text_to_search)
-        score += (matches / len(search_terms)) * 50
-        
+        # 4. Elementos adicionales (20 puntos máximo)
         if data['contact_page']:
-            score += 15
+            score += 8
         if data['phones']:
-            score += 15
-        score += len([x for x in social_links.values() if x]) * 5
+            score += 7
+        score += min(5, len([x for x in social_links.values() if x])) # Máximo 5 puntos por redes sociales
         
         data['score'] = score
-        return score >= 60, data
+        data['score_breakdown'] = {
+            'provincia_score': 40 if data['found_provincia'] else 0,
+            'codigo_postal_score': 20 if data['found_codigo_postal'] else 0,
+            'company_name_score': (matches / len(search_terms)) * 20 if search_terms else 0,
+            'additional_elements_score': score - ((40 if data['found_provincia'] else 0) + 
+                                               (20 if data['found_codigo_postal'] else 0) + 
+                                               ((matches / len(search_terms)) * 20 if search_terms else 0))
+        }
+        
+        # Se considera válida si alcanza al menos 60 puntos
+        return score >= 30, data
         
     except Exception as e:
         print(f"Error en verify_company_url: {str(e)}")
@@ -380,18 +460,18 @@ def generate_possible_urls(company_name):
     
     return list(valid_domains)
 
-def verify_urls_parallel(urls, company_name):
+def verify_urls_parallel(urls, company_name, provincia, codigo_postal):
     def verify_single_url(url):
         session = create_session()
         try:
             print(f"\nIniciando verificación de {url}")
             future = concurrent.futures.ThreadPoolExecutor().submit(
-                verify_company_url, url, company_name, session
+                verify_company_url, url, company_name, provincia, codigo_postal, session
             )
             is_valid, data = future.result(timeout=8)  # Timeout individual por URL
             return url, is_valid, data
         except (concurrent.futures.TimeoutError, Exception) as e:
-            print(f"Timeout o error en {url}")
+            print(f"Timeout o error en {url}: {str(e)}")
             return url, False, None
         finally:
             session.close()
@@ -401,8 +481,8 @@ def verify_urls_parallel(urls, company_name):
         futures = {executor.submit(verify_single_url, url): url for url in urls}
         done, _ = concurrent.futures.wait(
             futures, 
-            timeout=10,  # Timeout global reducido
-            return_when=concurrent.futures.FIRST_COMPLETED
+            timeout=30,  # Timeout global
+            return_when=concurrent.futures.ALL_COMPLETED
         )
         
         for future in done:
@@ -410,7 +490,8 @@ def verify_urls_parallel(urls, company_name):
                 url, is_valid, data = future.result(timeout=1)
                 if is_valid:
                     results[url] = data
-            except Exception:
+            except Exception as e:
+                print(f"Error en future.result: {str(e)}")
                 continue
 
         executor._threads.clear()
@@ -445,6 +526,9 @@ def process_excel(file_path, url_column='URL'):
         print(f"Error al leer el archivo: {str(e)}")
         return None
     
+    # Asegurarse de que el código postal tenga 5 dígitos
+    df['COD_POSTAL'] = df['COD_POSTAL'].astype(str).apply(lambda x: x.zfill(5))
+    
     # Inicializar columnas
     df['URL_Válida'] = False
     df['URLs_Encontradas'] = ''
@@ -460,16 +544,24 @@ def process_excel(file_path, url_column='URL'):
     df['Tiene_Ecommerce'] = False
     df['Ecommerce_Score'] = 0
     df['Ecommerce_Evidencia'] = ''
+    df['Score_Total'] = 0
+    df['Score_Provincia'] = 0
+    df['Score_CodigoPostal'] = 0
+    df['Score_NombreEmpresa'] = 0
+    df['Score_ElementosAdicionales'] = 0
     
     print("\nProcesando URLs...")
     for idx, row in tqdm(df.iterrows(), total=len(df), desc="Verificando empresas"):
         try:
             print(f"\nProcesando empresa {idx + 1}: {row['RAZON_SOCIAL']}")
             company_name = row['RAZON_SOCIAL']
+            provincia = row['NOM_PROVINCIA']
+            codigo_postal = row['COD_POSTAL']
             
             # Verificar caché
             cached_urls, cached_data = cache.get(company_name)
             if cached_urls:
+                print("Usando datos en caché")
                 valid_urls = cached_urls
                 verification_data = cached_data
             else:
@@ -479,7 +571,7 @@ def process_excel(file_path, url_column='URL'):
                     possible_urls.append(row[url_column])
                 
                 print(f"URLs a verificar: {possible_urls}")
-                verification_data = verify_urls_parallel(possible_urls, company_name)
+                verification_data = verify_urls_parallel(possible_urls, company_name, provincia, codigo_postal)
                 valid_urls = list(verification_data.keys())
                 
                 # Actualizar caché
@@ -505,6 +597,13 @@ def process_excel(file_path, url_column='URL'):
                 has_ecommerce = False
                 max_ecommerce_score = 0
                 all_evidence = []
+                best_scores = {
+                    'total': 0,
+                    'provincia': 0,
+                    'codigo_postal': 0,
+                    'nombre_empresa': 0,
+                    'elementos_adicionales': 0
+                }
                 
                 for data in verification_data.values():
                     if 'phones' in data:
@@ -519,6 +618,15 @@ def process_excel(file_path, url_column='URL'):
                         if data['ecommerce_data']['score'] > max_ecommerce_score:
                             max_ecommerce_score = data['ecommerce_data']['score']
                         all_evidence.extend(data['ecommerce_data']['evidence'])
+                    
+                    # Actualizar mejores scores
+                    if data.get('score', 0) > best_scores['total']:
+                        best_scores['total'] = data.get('score', 0)
+                        score_breakdown = data.get('score_breakdown', {})
+                        best_scores['provincia'] = score_breakdown.get('provincia_score', 0)
+                        best_scores['codigo_postal'] = score_breakdown.get('codigo_postal_score', 0)
+                        best_scores['nombre_empresa'] = score_breakdown.get('company_name_score', 0)
+                        best_scores['elementos_adicionales'] = score_breakdown.get('additional_elements_score', 0)
                 
                 # Asignar teléfonos (limitados a 3)
                 unique_phones = list(dict.fromkeys(all_phones))[:3]
@@ -537,6 +645,13 @@ def process_excel(file_path, url_column='URL'):
                 df.at[idx, 'Ecommerce_Score'] = max_ecommerce_score
                 df.at[idx, 'Ecommerce_Evidencia'] = '; '.join(all_evidence)
                 
+                # Asignar scores
+                df.at[idx, 'Score_Total'] = best_scores['total']
+                df.at[idx, 'Score_Provincia'] = best_scores['provincia']
+                df.at[idx, 'Score_CodigoPostal'] = best_scores['codigo_postal']
+                df.at[idx, 'Score_NombreEmpresa'] = best_scores['nombre_empresa']
+                df.at[idx, 'Score_ElementosAdicionales'] = best_scores['elementos_adicionales']
+                
                 # Intentar obtener información WHOIS
                 try:
                     whois_info = get_whois_info(valid_urls[0].split('/')[2])
@@ -547,14 +662,14 @@ def process_excel(file_path, url_column='URL'):
                     
         except KeyboardInterrupt:
             print("\nGuardando progreso antes de salir...")
-            output_file = os.path.splitext(file_path)[0] + '_procesado_100b.xlsx'
+            output_file = os.path.splitext(file_path)[0] + '_procesado_ubicacion.xlsx'
             df.to_excel(output_file, index=False, engine='openpyxl')
             sys.exit(0)
         except Exception as e:
             print(f"Error procesando empresa {idx + 1}: {str(e)}")
             continue
     
-    output_file = os.path.splitext(file_path)[0] + '_procesado_con500b.xlsx'
+    output_file = os.path.splitext(file_path)[0] + '_procesado_ubicacion.xlsx'
     try:
         df.to_excel(output_file, index=False, engine='openpyxl')
         return output_file
