@@ -28,7 +28,8 @@ async def async_validate_url(url: str, session: aiohttp.ClientSession) -> Tuple[
 
 def clean_url(url: str) -> Optional[str]:
     """
-    Clean URL by removing whitespace, converting to lowercase, and properly parsing
+    Clean URL by removing protocol prefix and keeping only the www domain part
+    Returns None if URL is invalid or doesn't contain www
     """
     if not url or pd.isna(url):
         return None
@@ -37,7 +38,7 @@ def clean_url(url: str) -> Optional[str]:
         # Remove leading/trailing whitespace and convert to lowercase
         url = url.strip().lower()
         
-        # Ensure proper protocol prefix
+        # Ensure proper protocol prefix for parsing
         if not url.startswith(('http://', 'https://')):
             url = f'http://{url}'
         
@@ -47,7 +48,17 @@ def clean_url(url: str) -> Optional[str]:
         if not parsed.netloc:
             return None
             
-        return f"{parsed.scheme}://{parsed.netloc}"
+        # Extract domain from netloc
+        domain = parsed.netloc
+        
+        # If domain starts with www, return it as is
+        if domain.startswith('www.'):
+            return domain
+        # If domain doesn't start with www, add it
+        elif '.' in domain:  # Ensure it's a valid domain
+            return f'www.{domain}'
+        
+        return None
     except Exception:
         return None
 
