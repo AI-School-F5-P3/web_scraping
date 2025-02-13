@@ -19,6 +19,7 @@ class Sociedad(Base):
     URL = Column(String(255), nullable=True)
     
     # New columns
+    URL_VALIDA = Column(String(255), nullable=True)
     URL_EXISTS = Column(Boolean, default=False, nullable=False)
     URL_LIMPIA = Column(String(255), nullable=True)
     URL_STATUS = Column(Integer, nullable=True)

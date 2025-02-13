@@ -74,6 +74,7 @@ def prepare_dataframe(df):
     """
     # Add new columns with default values
     new_columns = {
+        'URL_VALIDA': None,
         'URL_EXISTS': False,
         'URL_LIMPIA': None,
         'URL_STATUS': None,
@@ -104,7 +105,7 @@ def prepare_dataframe(df):
     df['E_COMMERCE'] = df['E_COMMERCE'].astype(bool)
     
     # Convert empty strings to None in new columns
-    string_columns = ['URL_LIMPIA', 'URL_STATUS_MENSAJE', 'TELEFONO_1', 'TELEFONO_2', 'TELEFONO_3', 
+    string_columns = ['URL_VALIDA','URL_LIMPIA', 'URL_STATUS_MENSAJE', 'TELEFONO_1', 'TELEFONO_2', 'TELEFONO_3', 
                     'FACEBOOK', 'TWITTER', 'LINKEDIN', 'INSTAGRAM', 'YOUTUBE']
     for col in string_columns:
         df[col] = df[col].replace('', None)
