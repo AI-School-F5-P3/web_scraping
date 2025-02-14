@@ -23,7 +23,7 @@ class SQLGenerator:
         system_prompt = """You are a SQL expert. Given a natural language query about companies data, 
         generate SQL for table 'empresas' with columns: id, codigo_infotel, nif, razon_social, 
         direccion, codigo_postal, poblacion, provincia, website, url_valid, telefonos, redes_sociales, 
-        ecommerce, fecha_actualizacion, confidence_score. Generate only SQL, no explanations."""
+        ecommerce, fecha_actualizacion, confidence_score. Generate only SQL, no explanations. Answer in Spanish."""
         
         try:
             messages = [
@@ -31,7 +31,14 @@ class SQLGenerator:
                 HumanMessage(content=query)
             ]
             
+            # Agregar log para imprimir el prompt que se envía:
+            logger.info(f"SQLGenerator.generate_sql - Prompt messages: {messages}")
+            
             response = self.llm.predict_messages(messages)
+            
+            # Agregar log para imprimir la respuesta obtenida
+            logger.info(f"SQLGenerator.generate_sql - LLM response: {response.content}")
+            
             return response.content.strip()
                     
         except Exception as e:

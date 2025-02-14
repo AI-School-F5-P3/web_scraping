@@ -197,9 +197,9 @@ def render_main_content(chat: ChatInterface, metrics: MetricsInterface, redis_cl
         data_processor.render_upload_section(main_area=True)
     
     # Chat interface
-    chat_container = st.container()
-    with chat_container:
-        chat.display_chat_history()
+    # chat_container = st.container()
+    # with chat_container:
+    #     chat.display_chat_history()
     
     # Analytics section
     st.markdown("---")
@@ -323,6 +323,9 @@ def main():
     
     # Initialize session state
     initialize_session_state()
+    
+    # Agregar una salida de depuración para ver el proveedor LLM en la interfaz
+    st.write("LLM Provider (session):", st.session_state.llm_provider)
     
     # Initialize components
     redis_client = initialize_redis()

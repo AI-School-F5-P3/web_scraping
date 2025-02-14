@@ -13,7 +13,6 @@ class LLMManager:
     def get_llm(provider: Optional[str] = None) -> BaseLanguageModel:
         """Get LLM instance based on provider string"""
         try:
-            # Use provided provider or default from config
             provider_str = provider or Config.LLM_PROVIDER
             provider_enum = LLMProvider.from_string(provider_str)
             
@@ -21,7 +20,8 @@ class LLMManager:
                 return ChatOllama(
                     model=Config.OLLAMA_MODEL,
                     base_url=Config.OLLAMA_BASE_URL,
-                    temperature=0.7
+                    temperature=0.7,
+                    request_timeout=60  # Add timeout
                 )
             elif provider_enum == LLMProvider.OPENAI:
                 if not Config.OPENAI_API_KEY:
@@ -33,9 +33,15 @@ class LLMManager:
                 )
             else:
                 raise ValueError(f"Unsupported LLM provider: {provider_str}")
+                
         except Exception as e:
             logger.error(f"Failed to initialize LLM: {str(e)}")
-            raise
+            # Return default model instead of raising
+            return ChatOllama(
+                model="deepseek-r1:1.5b",
+                base_url="http://localhost:11434",
+                temperature=0.7
+            )
 
     @staticmethod
     def validate_ollama_connection() -> bool:

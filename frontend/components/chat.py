@@ -77,8 +77,8 @@ class ChatInterface:
                 if st.button("🧹 Limpiar Historial", key=f"clear_history_{self.llm_provider}"):
                     self.clear_history()
             
-            # Display messages
-            for message in st.session_state.messages:
+            # Display messages: reverse messages list to show newest first
+            for message in reversed(st.session_state.messages):
                 with st.chat_message(message["role"]):
                     st.markdown(message["content"])
                     if message.get("data") is not None:

@@ -10,6 +10,8 @@ from datetime import datetime
 from langchain_ollama import ChatOllama
 from langchain.tools import Tool
 import time
+# Importamos el LLMManager que centraliza la elección del modelo
+from chatbot.llm_manager import LLMManager
 
 logger = logging.getLogger(__name__)
 
@@ -24,32 +26,14 @@ class AnalysisOutput(BaseModel):
     recommendations: List[str] = Field(default_factory=list, description="Recommendations based on analysis")
 
 def get_llm(llm_provider: str):
-    if llm_provider == "DeepSeek":
-        try:
-            # Initialize ChatOllama with explicit model name
-            llm = ChatOllama(
-                model="deepseek-r1:1.5b",  # or your installed model name
-                base_url=Config.OLLAMA_BASE_URL,
-                temperature=0.7,
-            )
-            # Test the LLM with a simple query
-            try:
-                llm.invoke("test")
-                return llm
-            except Exception as e:
-                logger.error(f"LLM test failed: {str(e)}")
-                raise
-        except Exception as e:
-            logger.error(f"LLM initialization error: {str(e)}")
-            # Return a more specific error rather than falling back
-            raise RuntimeError(f"Failed to initialize LLM: {str(e)}")
-    else:
-        from langchain_openai import ChatOpenAI
-        return ChatOpenAI(
-            model_name="gpt-4",
-            api_key=Config.OPENAI_API_KEY,
-            temperature=0.7
-        )
+    """
+    Delegamos la selección del LLM a LLMManager para centralizar la lógica.
+    """
+    try:
+        return LLMManager.get_llm(provider=llm_provider)
+    except Exception as e:
+        logger.error(f"Error al obtener el LLM: {str(e)}")
+        raise
 
 class DatabaseTool:
     def __init__(self):
@@ -70,24 +54,25 @@ class DatabaseTool:
 
 class ScrapingAgent:
     def __init__(self, llm_provider: str):
-        self.llm = get_llm(llm_provider)  # Pass the string directly
+        self.llm = get_llm(llm_provider)
         self.db_tool = DatabaseTool()
         self.agents = self.create_agents()
         self.tasks = []
         
     def create_agents(self) -> List[Agent]:
-        # Create a proper Tool instance
         db_search_tool = Tool(
             name="database_search",
             func=self.db_tool.database_search,
             description="Search company database with natural language query"
         )
+        
+        # Explicitly set LLM for each agent
         retriever_agent = Agent(
             role="Database Information Retriever",
             goal="Retrieve accurate information from the company database",
             backstory="Expert at querying company information from databases",
             tools=[db_search_tool], 
-            llm=self.llm,
+            llm=self.llm,  # Use the configured LLM
             verbose=True
         )
         
@@ -95,7 +80,7 @@ class ScrapingAgent:
             role="Data Analyzer",
             goal="Analyze and synthesize company information",
             backstory="Skilled at interpreting business data and providing insights",
-            llm=self.llm,
+            llm=self.llm,  # Use the configured LLM
             verbose=True
         )
         

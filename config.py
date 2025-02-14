@@ -46,3 +46,5 @@ class Config:
     OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "deepseek-r1:1.5b")
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4")
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    
+    
