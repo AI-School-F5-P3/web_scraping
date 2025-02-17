@@ -42,6 +42,9 @@ class CustomLLM(LLM):
     @property
     def _llm_type(self) -> str:
         return "custom_ollama"
+    
+    class Config:
+        extra = "allow"
 
 class OrchestratorAgent:
     SYSTEM_PROMPT = f"""Eres un experto Director de Operaciones de nivel enterprise para análisis empresarial en España.

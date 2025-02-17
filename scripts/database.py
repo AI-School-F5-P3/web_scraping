@@ -18,7 +18,7 @@ class DatabaseManager:
             cursor.execute(f"SET work_mem = '{ram_gb//4}MB'")
             cursor.execute(f"SET maintenance_work_mem = '{ram_gb//4}MB'")
             cursor.execute(f"SET effective_cache_size = '{ram_gb*3//4}GB'")
-            cursor.execute("SET effective_io_concurrency = 200")
+            cursor.execute("SET effective_io_concurrency = 0")
             cursor.execute("SET random_page_cost = 1.1")
             cursor.execute("SET cpu_tuple_cost = 0.03")
             cursor.execute("SET cpu_index_tuple_cost = 0.01")

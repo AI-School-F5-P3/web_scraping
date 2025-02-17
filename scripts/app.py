@@ -42,7 +42,7 @@ class EnterpriseApp:
     def render_sidebar(self):
         """Renderiza la barra lateral con opciones de carga y filtros"""
         with st.sidebar:
-            st.image("logo.png", width=200)  # Asegúrate de tener el logo en tu directorio
+            # st.image("logo.png", width=200)  # Asegúrate de tener el logo en tu directorio
             st.title("Control Panel")
             
             # Sección de carga de archivos
@@ -101,9 +101,12 @@ class EnterpriseApp:
             with st.spinner("Procesando archivo..."):
                 # Leer archivo
                 if file.name.endswith('.csv'):
-                    df = pd.read_csv(file)
+                    df = pd.read_csv(file, header=0, sep=';', encoding='utf-8')
                 else:
-                    df = pd.read_excel(file)
+                    df = pd.read_excel(file, header=0, sep=';', encoding='utf-8')
+                    
+                # Mostrar columnas detectadas para depuración
+                st.write("Columnas detectadas:", df.columns.tolist())
                 
                 # Validar columnas
                 missing_cols = [col for col in REQUIRED_COLUMNS if col not in df.columns]
@@ -112,13 +115,15 @@ class EnterpriseApp:
                     return
                 
                 # Normalizar nombres de columnas
-                df.columns = [col.upper() for col in df.columns]
+                df.columns = [col.strip().lower() for col in df.columns]
                 
                 # Generar ID de lote
                 batch_id = f"BATCH_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                 
                 # Guardar en base de datos
                 result = self.db.save_batch(df, batch_id, st.session_state.get("user", "streamlit_user"))
+                
+                st.write("Resultado de save_batch:", result)
                 
                 if result["status"] == "success":
                     st.session_state.current_batch = {
@@ -132,7 +137,7 @@ class EnterpriseApp:
                     st.error(f"❌ Error al procesar archivo: {result['message']}")
                 
         except Exception as e:
-            st.error(f"❌ Error en la carga del archivo: {str(e)}")
+            st.error(f"❌ Error al procesar archivo: {result.get('message', 'Error desconocido')}")
 
     def render_dashboard(self):
         """Renderiza el dashboard con estadísticas"""
@@ -140,6 +145,11 @@ class EnterpriseApp:
             st.info("👆 Carga un archivo para ver las estadísticas")
             return
         
+        print(st.session_state.current_batch['data'].columns)
+        
+        st.session_state.current_batch['data'].columns = st.session_state.current_batch['data'].columns.str.strip()
+        
+        print(st.session_state.current_batch['data'].columns)
         # Estadísticas generales
         col1, col2, col3, col4 = st.columns(4)
         
