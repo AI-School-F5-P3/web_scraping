@@ -7,7 +7,7 @@ load_dotenv()
 
 class LLMProvider(Enum):
     DEEPSEEK = "deepseek"
-    OPENAI = "openai"
+    GROQ = "groq"
     
     @classmethod
     def from_string(cls, value: str) -> 'LLMProvider':
@@ -16,8 +16,8 @@ class LLMProvider(Enum):
             value = value.upper()
             if value == "DEEPSEEK":
                 return cls.DEEPSEEK
-            elif value == "OPENAI":
-                return cls.OPENAI
+            elif value == "GROQ":
+                return cls.GROQ
             else:
                 return cls.DEEPSEEK  # Default
         except (AttributeError, KeyError):
@@ -44,7 +44,8 @@ class Config:
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek")  # Store as string
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "deepseek-r1:1.5b")
-    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4")
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    
+
+    # Configuración de Groq
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")  # Tu clave de API de Groq
+    GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")  # Declarar el modelo Groq aquí    
     

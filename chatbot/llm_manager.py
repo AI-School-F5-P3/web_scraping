@@ -2,7 +2,7 @@
 from typing import Optional, Union
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_ollama import ChatOllama
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 from config import Config, LLMProvider
 import logging
 
@@ -23,12 +23,13 @@ class LLMManager:
                     temperature=0.7,
                     request_timeout=60  # Add timeout
                 )
-            elif provider_enum == LLMProvider.OPENAI:
-                if not Config.OPENAI_API_KEY:
-                    raise ValueError("OpenAI API key not configured")
-                return ChatOpenAI(
-                    model_name=Config.OPENAI_MODEL,
-                    api_key=Config.OPENAI_API_KEY,
+            elif provider_enum == LLMProvider.GROQ:
+                # Se usa Groq en lugar de ChatOpenAI
+                if not Config.GROQ_API_KEY:
+                    raise ValueError("Groq API key no configurada")
+                return ChatGroq(
+                    model_name=Config.GROQ_MODEL,
+                    api_key=Config.GROQ_API_KEY,
                     temperature=0.7
                 )
             else:
