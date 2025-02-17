@@ -8,6 +8,7 @@ from config import DB_CONFIG, HARDWARE_CONFIG, TIMEOUT_CONFIG
 
 class DatabaseManager:
     def __init__(self):
+        # DB_CONFIG["client_encoding"] = "UTF8"
         self.connection = psycopg2.connect(**DB_CONFIG)
         self.connection.autocommit = True
         self._optimize_connection()

@@ -8,7 +8,46 @@ from agents import OrchestratorAgent, DBAgent, ScrapingAgent
 from database import DatabaseManager
 from scraping import ProWebScraper
 from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA
+from fastapi import FastAPI
+from pydantic import BaseModel
+from agents import OrchestratorAgent, DBAgent, ScrapingAgent 
 
+
+app = FastAPI()
+orchestrator = OrchestratorAgent()
+db_agent = DBAgent()
+scraping_agent = ScrapingAgent()
+
+class UserRequest(BaseModel):
+    query: str
+
+@app.post("/process")
+def process_request(request: UserRequest):
+    """
+    Recibe una orden desde el frontend y activa el agente correcto.
+    """
+    result = orchestrator.process(request.query)
+
+    if not result["valid"]:
+        return {"error": "Consulta no válida para empresas en España."}
+
+    return {"response": result["response"], "context": result.get("context", {})}
+
+@app.post("/db-query")
+def generate_sql(request: UserRequest):
+    """
+    Genera una consulta SQL basada en lenguaje natural.
+    """
+    result = db_agent.generate_query(request.query)
+    return result
+
+@app.post("/scrape")
+def scrape_website(request: UserRequest):
+    """
+    Planifica el scraping de una URL.
+    """
+    result = scraping_agent.plan_scraping(request.query)
+    return result
 class EnterpriseApp:
     def __init__(self):
         self.init_session_state()
