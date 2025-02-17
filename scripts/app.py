@@ -8,6 +8,7 @@ from agents import OrchestratorAgent, DBAgent, ScrapingAgent
 from database import DatabaseManager
 from scraping import ProWebScraper
 from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA
+import matplotlib.pyplot as plt
 
 class EnterpriseApp:
     def __init__(self):
@@ -15,6 +16,10 @@ class EnterpriseApp:
         self.db = DatabaseManager()
         self.scraper = ProWebScraper()
         self.setup_agents()
+        
+        # Nuevo: cargar datos de la BD si no hay nada en session_state
+        self.load_data_from_db()
+        
         st.set_page_config(
             page_title="Sistema Empresarial de Análisis",
             page_icon="🏢",
@@ -32,6 +37,20 @@ class EnterpriseApp:
             st.session_state.last_query = None
         if "show_sql" not in st.session_state:
             st.session_state.show_sql = False
+            
+    def load_data_from_db(self):
+        """Si no hay datos en sesión, se cargan desde la BD"""
+        if st.session_state.current_batch is None:
+            df = self.db.execute_query("SELECT * FROM sociedades", return_df=True)
+            if df is not None and not df.empty:
+                # Normalizar nombres de columnas a minúsculas
+                df.columns = df.columns.str.strip().str.lower()
+                st.session_state.current_batch = {
+                    "id": "loaded_from_db",
+                    "data": df,
+                    "total_records": len(df),
+                    "timestamp": datetime.now()
+                }
 
     def setup_agents(self):
         """Configuración de agentes inteligentes"""
@@ -144,14 +163,10 @@ class EnterpriseApp:
         if not st.session_state.current_batch:
             st.info("👆 Carga un archivo para ver las estadísticas")
             return
-        
-        # print(st.session_state.current_batch['data'].columns)
-        
-        # st.session_state.current_batch['data'].columns = st.session_state.current_batch['data'].columns.str.strip()
+
         df = st.session_state.current_batch["data"]
         df.columns = df.columns.str.strip().str.lower()
         
-        # print(st.session_state.current_batch['data'].columns)
         # Estadísticas generales
         col1, col2, col3, col4 = st.columns(4)
         
@@ -181,8 +196,28 @@ class EnterpriseApp:
             
         with col2:
             st.subheader("Estado de URLs")
-            url_status = st.session_state.current_batch['data']['URL'].notna().value_counts()
-            st.pie_chart(url_status)
+            
+            # Evaluamos si cada URL es realmente válida: debe ser una cadena y no estar vacía
+            valid_url = st.session_state.current_batch['data']['url'].apply(
+                lambda x: isinstance(x, str) and x.strip() != '' and 
+                        (x.strip().lower().startswith("http://") or 
+                        x.strip().lower().startswith("https://") or 
+                        x.strip().lower().startswith("www."))
+            )
+            url_status = valid_url.value_counts()
+            
+            # Generamos las etiquetas de forma dinámica
+            labels = ["Con URL" if val is True else "Sin URL" for val in url_status.index]
+            sizes = url_status.values
+            default_colors = ['#66b3ff', '#ff9999']
+            colors = default_colors[:len(sizes)]
+            
+            # Crear el gráfico de pastel usando matplotlib
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots()
+            ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
+            ax.axis('equal')  # Mantiene el gráfico circular
+            st.pyplot(fig)
 
     def render_queries(self):
         """Renderiza la sección de consultas"""
@@ -205,16 +240,20 @@ class EnterpriseApp:
         # Mostrar resultados
         if st.session_state.last_query:
             with st.expander("📝 Última consulta", expanded=True):
-                if st.session_state.show_sql:
+                if st.session_state.show_sql and "sql" in st.session_state.last_query:
                     st.code(st.session_state.last_query["sql"], language="sql")
-                st.dataframe(
-                    st.session_state.last_query["results"],
-                    use_container_width=True
-                )
+                if "results" in st.session_state.last_query:
+                    st.dataframe(st.session_state.last_query["results"], use_container_width=True)
+                if "scraping_plan" in st.session_state.last_query:
+                    st.json(st.session_state.last_query["scraping_plan"])
 
     def render_scraping(self):
         """Renderiza la sección de web scraping"""
         st.subheader("🌐 Web Scraping")
+        
+        # Intentar cargar datos si no hay nada
+        if st.session_state.current_batch is None:
+            self.load_data_from_db()
         
         if not st.session_state.current_batch:
             st.warning("⚠️ Primero debes cargar un archivo con URLs")
@@ -261,38 +300,35 @@ class EnterpriseApp:
         if st.button("Generar Análisis"):
             self.generate_analysis(analysis_type)
 
+
     def process_query(self, query: str):
-        """Procesa consultas en lenguaje natural"""
+        """Procesa consultas en lenguaje natural usando el orquestador"""
         try:
             with st.spinner("Procesando consulta..."):
-                # Primero usar el orchestrator
                 orchestrated_response = self.orchestrator.process(query)
                 
                 if not orchestrated_response["valid"]:
                     st.error(orchestrated_response["response"])
                     return
                 
-                query_info = None  # Inicializamos la variable
+                # Se interpreta la respuesta para decidir qué agente usar
+                actions = orchestrated_response["response"].lower()
                 
-                # El orchestrator decide qué agentes usar
-                if "SQL" in orchestrated_response["response"]:
-                    # Generar SQL
+                if "sql" in actions:
                     query_info = self.db_agent.generate_query(query)
-                    
-                if "scraping" in orchestrated_response["response"]:
-                    if query_info is None:
-                        query_info = self.db_agent.generate_query(query)
-                    # Ejecutar consulta
-                    results = self.db.execute_query(
-                        query_info["query"],
-                        return_df=True
-                    )
-
-                    # Guardar resultados
+                    results = self.db.execute_query(query_info["query"], return_df=True)
                     st.session_state.last_query = {
                         "sql": query_info["query"],
                         "results": results
                     }
+                elif "scraping" in actions:
+                    scraping_plan = self.scraping_agent.plan_scraping(query)
+                    st.session_state.last_query = {
+                        "scraping_plan": scraping_plan,
+                        "message": "Plan de scraping generado."
+                    }
+                else:
+                    st.info("La consulta no requiere acción (SQL o scraping).")
                 
         except Exception as e:
             st.error(f"Error al procesar consulta: {str(e)}")
@@ -365,16 +401,47 @@ class EnterpriseApp:
                 df = df[df['nom_provincia'] == provincia]
                 
             if has_web:
-                df = df[df['URL'].notna()]
+                df = df[df['url'].notna()]
                 
             if has_ecommerce:
-                df = df[df['E_COMMERCE'] == True]
+                df = df[df['e_commerce'] == True]
                 
             st.session_state.current_batch['filtered_data'] = df
             st.success("Filtros aplicados correctamente")
             
         except Exception as e:
             st.error(f"Error aplicando filtros: {str(e)}")
+
+    # Métodos placeholder para análisis (puedes personalizarlos)
+    def show_geographic_analysis(self):
+        st.write("### Análisis Geográfico")
+        df = st.session_state.current_batch['data']
+        prov_counts = df['nom_provincia'].value_counts()
+        st.bar_chart(prov_counts)
+
+    def show_ecommerce_analysis(self):
+        st.write("### Análisis de E-commerce")
+        df = st.session_state.current_batch['data']
+        if 'e_commerce' in df.columns:
+            ecommerce_counts = df['e_commerce'].value_counts()
+            st.bar_chart(ecommerce_counts)
+        else:
+            st.info("No hay datos de e-commerce disponibles.")
+
+    def show_digital_presence_analysis(self):
+        st.write("### Presencia Digital")
+        df = st.session_state.current_batch['data']
+        presence = df['url'].notna().value_counts()
+        st.bar_chart(presence)
+
+    def show_contactability_analysis(self):
+        st.write("### Análisis de Contactabilidad")
+        df = st.session_state.current_batch['data']
+        if 'nif' in df.columns:
+            count_nif = df['nif'].notna().sum()
+            st.write(f"Empresas con NIF: {count_nif}")
+        else:
+            st.info("No hay datos de contacto disponibles.")
 
     def run(self):
         """Ejecuta la aplicación"""

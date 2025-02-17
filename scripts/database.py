@@ -43,10 +43,13 @@ class DatabaseManager:
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(query, params or ())
-                if return_df:
+                # Chequeamos si la query inicia con SELECT
+                if return_df and query.strip().lower().startswith("select"):
                     columns = [desc[0] for desc in cursor.description]
                     return pd.DataFrame(cursor.fetchall(), columns=columns)
-                return cursor.fetchall()
+                elif query.strip().lower().startswith("select"):
+                    return cursor.fetchall()
+                return None
         except Exception as e:
             self._handle_db_error(e, query)
             return None
@@ -184,7 +187,7 @@ class DatabaseManager:
         );
         """
         try:
-            self.execute_query(create_table_query)
+            self.execute_query(create_table_query, return_df=False)
         except Exception as e:
             print(f"Error creating table: {e}")
 
