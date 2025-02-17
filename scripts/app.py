@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import time
-from agents import OrchestratorAgent, DBAgent, ScrapingAgent
+from agents import DBAgent, ScrapingAgent  # Removed OrchestratorAgent
 from database import DatabaseManager
 from scraping import ProWebScraper
 from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA
@@ -16,8 +16,7 @@ class EnterpriseApp:
         self.db = DatabaseManager()
         self.scraper = ProWebScraper()
         self.setup_agents()
-        
-        # Nuevo: cargar datos de la BD si no hay nada en session_state
+        # Cargar datos de la BD si no hay nada en session_state
         self.load_data_from_db()
         
         st.set_page_config(
@@ -54,7 +53,6 @@ class EnterpriseApp:
 
     def setup_agents(self):
         """Configuración de agentes inteligentes"""
-        self.orchestrator = OrchestratorAgent()
         self.db_agent = DBAgent()
         self.scraping_agent = ScrapingAgent()
 
@@ -116,7 +114,6 @@ class EnterpriseApp:
     def handle_file_upload(self, file):
         """Procesa la carga de archivos"""
         try:
-            # Mostrar spinner durante la carga
             with st.spinner("Procesando archivo..."):
                 # Leer archivo
                 if file.name.endswith('.csv'):
@@ -124,7 +121,6 @@ class EnterpriseApp:
                 else:
                     df = pd.read_excel(file, header=0, sep=';', encoding='utf-8')
                     
-                # Mostrar columnas detectadas para depuración
                 st.write("Columnas detectadas:", df.columns.tolist())
                 
                 # Validar columnas
@@ -156,7 +152,7 @@ class EnterpriseApp:
                     st.error(f"❌ Error al procesar archivo: {result['message']}")
                 
         except Exception as e:
-            st.error(f"❌ Error al procesar archivo: {result.get('message', 'Error desconocido')}")
+            st.error(f"❌ Error al procesar archivo: {str(e)}")
 
     def render_dashboard(self):
         """Renderiza el dashboard con estadísticas"""
@@ -196,62 +192,61 @@ class EnterpriseApp:
             
         with col2:
             st.subheader("Estado de URLs")
-            
-            # Evaluamos si cada URL es realmente válida: debe ser una cadena y no estar vacía
             valid_url = st.session_state.current_batch['data']['url'].apply(
                 lambda x: isinstance(x, str) and x.strip() != '' and 
-                        (x.strip().lower().startswith("http://") or 
-                        x.strip().lower().startswith("https://") or 
-                        x.strip().lower().startswith("www."))
+                          (x.strip().lower().startswith("http://") or 
+                           x.strip().lower().startswith("https://") or 
+                           x.strip().lower().startswith("www."))
             )
             url_status = valid_url.value_counts()
-            
-            # Generamos las etiquetas de forma dinámica
             labels = ["Con URL" if val is True else "Sin URL" for val in url_status.index]
             sizes = url_status.values
             default_colors = ['#66b3ff', '#ff9999']
             colors = default_colors[:len(sizes)]
             
-            # Crear el gráfico de pastel usando matplotlib
             import matplotlib.pyplot as plt
             fig, ax = plt.subplots()
             ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
-            ax.axis('equal')  # Mantiene el gráfico circular
+            ax.axis('equal')
             st.pyplot(fig)
 
     def render_queries(self):
-        """Renderiza la sección de consultas"""
-        st.subheader("🔍 Consultas Avanzadas")
+        """Renderiza la sección de consultas (SQL)"""
+        st.subheader("🔍 Consultas Avanzadas (SQL)")
         
-        # Input de consulta
         query = st.text_area(
             "Escribe tu consulta en lenguaje natural",
-            placeholder="Ejemplo: Mostrar empresas de Madrid con e-commerce",
-            help="Puedes preguntar sobre cualquier aspecto de los datos"
+            placeholder="Ejemplo: Dame las 10 primeras empresas de Madrid",
+            help="Se traducirá a una consulta SQL"
         )
         
         col1, col2 = st.columns([1, 4])
         with col1:
-            if st.button("Ejecutar"):
+            if st.button("Ejecutar Consulta"):
                 self.process_query(query)
         with col2:
             st.checkbox("Mostrar SQL", value=False, key="show_sql")
         
-        # Mostrar resultados
         if st.session_state.last_query:
             with st.expander("📝 Última consulta", expanded=True):
                 if st.session_state.show_sql and "sql" in st.session_state.last_query:
                     st.code(st.session_state.last_query["sql"], language="sql")
-                if "results" in st.session_state.last_query:
-                    st.dataframe(st.session_state.last_query["results"], use_container_width=True)
-                if "scraping_plan" in st.session_state.last_query:
-                    st.json(st.session_state.last_query["scraping_plan"])
+                # If the result is an aggregate (e.g., a single number) show it as a metric
+                results = st.session_state.last_query.get("results")
+                if results is not None:
+                    if isinstance(results, pd.DataFrame) and results.shape[0] == 1 and results.shape[1] == 1:
+                        value = results.iloc[0, 0]
+                        st.metric("Resultado", value)
+                    else:
+                        st.dataframe(results, use_container_width=True)
+                if "explanation" in st.session_state.last_query:
+                    with st.expander("Explicación LLM"):
+                        st.write(st.session_state.last_query["explanation"])
 
     def render_scraping(self):
         """Renderiza la sección de web scraping"""
         st.subheader("🌐 Web Scraping")
         
-        # Intentar cargar datos si no hay nada
         if st.session_state.current_batch is None:
             self.load_data_from_db()
         
@@ -260,7 +255,6 @@ class EnterpriseApp:
             return
         
         col1, col2 = st.columns(2)
-        
         with col1:
             limit = st.number_input(
                 "Límite de URLs a procesar",
@@ -268,12 +262,10 @@ class EnterpriseApp:
                 max_value=1000,
                 value=50
             )
-            
         with col2:
             if st.button("Iniciar Scraping"):
                 self.process_scraping(limit)
                 
-        # Mostrar progreso si está procesando
         if st.session_state.processing_status:
             st.progress(st.session_state.processing_status["progress"])
             st.write(f"Procesando: {st.session_state.processing_status['current_url']}")
@@ -286,7 +278,6 @@ class EnterpriseApp:
             st.warning("⚠️ Carga datos para realizar análisis")
             return
         
-        # Opciones de análisis
         analysis_type = st.selectbox(
             "Tipo de Análisis",
             [
@@ -300,36 +291,16 @@ class EnterpriseApp:
         if st.button("Generar Análisis"):
             self.generate_analysis(analysis_type)
 
-
     def process_query(self, query: str):
-        """Procesa consultas en lenguaje natural usando el orquestador"""
+        """Procesa consultas en lenguaje natural usando DBAgent para generar SQL"""
         try:
             with st.spinner("Procesando consulta..."):
-                orchestrated_response = self.orchestrator.process(query)
-                
-                if not orchestrated_response["valid"]:
-                    st.error(orchestrated_response["response"])
-                    return
-                
-                # Se interpreta la respuesta para decidir qué agente usar
-                actions = orchestrated_response["response"].lower()
-                
-                if "sql" in actions:
-                    query_info = self.db_agent.generate_query(query)
-                    results = self.db.execute_query(query_info["query"], return_df=True)
-                    st.session_state.last_query = {
-                        "sql": query_info["query"],
-                        "results": results
-                    }
-                elif "scraping" in actions:
-                    scraping_plan = self.scraping_agent.plan_scraping(query)
-                    st.session_state.last_query = {
-                        "scraping_plan": scraping_plan,
-                        "message": "Plan de scraping generado."
-                    }
-                else:
-                    st.info("La consulta no requiere acción (SQL o scraping).")
-                
+                query_info = self.db_agent.generate_query(query)
+                results = self.db.execute_query(query_info["query"], return_df=True)
+                st.session_state.last_query = {
+                    "sql": query_info["query"],
+                    "results": results
+                }
         except Exception as e:
             st.error(f"Error al procesar consulta: {str(e)}")
 
@@ -347,29 +318,24 @@ class EnterpriseApp:
             
             progress_bar = st.progress(0)
             status_text = st.empty()
-            
             total_urls = len(urls_df)
             results = []
             
             for idx, row in urls_df.iterrows():
-                # Actualizar progreso
                 progress = (idx + 1) / total_urls
                 progress_bar.progress(progress)
                 status_text.text(f"Procesando URL {idx + 1}/{total_urls}: {row['url']}")
                 
-                # Realizar scraping
-                result = self.scraper.scrape_url(row['url'], {
-                    'cod_infotel': row['cod_infotel']
-                })
+                result = self.scraping_agent.plan_scraping(row['url'])
+                # Incluir información de la empresa para actualizar en la BD
+                result['cod_infotel'] = row['cod_infotel']
                 results.append(result)
                 
-                # Breve pausa
                 time.sleep(0.5)
             
-            # Actualizar resultados en base de datos
             self.db.update_scraping_results(
-                results,
-                st.session_state.current_batch["id"]
+                results=results,
+                batch_id=st.session_state.current_batch["id"]
             )
             
             st.success(f"✅ Scraping completado: {len(results)} URLs procesadas")
@@ -388,7 +354,6 @@ class EnterpriseApp:
                 self.show_digital_presence_analysis()
             else:
                 self.show_contactability_analysis()
-                
         except Exception as e:
             st.error(f"Error generando análisis: {str(e)}")
 
@@ -408,11 +373,10 @@ class EnterpriseApp:
                 
             st.session_state.current_batch['filtered_data'] = df
             st.success("Filtros aplicados correctamente")
-            
         except Exception as e:
             st.error(f"Error aplicando filtros: {str(e)}")
 
-    # Métodos placeholder para análisis (puedes personalizarlos)
+    # Métodos placeholder para análisis
     def show_geographic_analysis(self):
         st.write("### Análisis Geográfico")
         df = st.session_state.current_batch['data']

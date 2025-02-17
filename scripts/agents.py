@@ -8,6 +8,7 @@ import pandas as pd
 from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 from config import LLM_MODELS, OLLAMA_ENDPOINT, PROVINCIAS_ESPANA, HARDWARE_CONFIG
+import re
 
 class CustomLLM(LLM):
     def __init__(self, model_name: str):
@@ -46,131 +47,52 @@ class CustomLLM(LLM):
     class Config:
         extra = "allow"
 
-class OrchestratorAgent:
-    SYSTEM_PROMPT = f"""Eres un experto Director de Operaciones de nivel enterprise para análisis empresarial en España.
-
-CONTEXTO Y ESPECIALIZACIONES:
-1. Base de Datos Empresarial:
-   - Gestión avanzada de registros empresariales
-   - Análisis multi-provincial: {', '.join(PROVINCIAS_ESPANA)}
-   - Validación y limpieza de datos empresariales
-
-2. Web Scraping Especializado:
-   - Análisis de presencia digital empresarial
-   - Extracción de información de contacto verificada
-   - Detección de actividad e-commerce
-
-3. Análisis Empresarial:
-   - Validación de URLs empresariales
-   - Detección de redes sociales corporativas
-   - Verificación de datos de contacto
-
-REGLAS ESTRICTAS:
-1. Enfoque Exclusivo: SOLO procesar consultas relacionadas con empresas españolas
-2. Prioridad en Datos: Mantener precisión y verificación en todo momento
-3. Optimización: Utilizar recursos GPU/CPU eficientemente
-4. Coordinación: Distribuir tareas entre agentes según especialidad
-
-EJEMPLOS DE INTERACCIÓN:
-Usuario: "Analizar empresas de Madrid"
-→ Coordinar DBAgent para consulta inicial
-→ Distribuir ScrapingAgent para análisis web
-→ Consolidar y verificar resultados
-
-Usuario: "Verificar webs de Barcelona"
-→ Priorizar análisis por lotes
-→ Paralelizar scraping con recursos disponibles
-→ Validar y actualizar estados URL"""
-
-    def __init__(self):
-        self.llm = CustomLLM(LLM_MODELS["orquestador"])
-        self.memory = ConversationBufferMemory()
-        self.max_workers = HARDWARE_CONFIG["max_workers"]
-
-    def process(self, user_input: str) -> Dict[str, Any]:
-        if not self._validate_input(user_input):
-            return {
-                "response": "Solo proceso consultas relacionadas con empresas españolas.",
-                "valid": False
-            }
-
-        full_prompt = f"{self.SYSTEM_PROMPT}\nUSER: {user_input}"
-        response = self.llm.invoke(full_prompt)
-        
-        return {
-            "response": response,
-            "valid": True,
-            "context": self.memory.load_memory_variables({})
-        }
-
-    def _validate_input(self, query: str) -> bool:
-        business_terms = [
-            'empresa', 'negocio', 'sociedad', 'comercio',
-            'web', 'url', 'análisis', 'datos'
-        ] + PROVINCIAS_ESPANA
-        
-        query_lower = query.lower()
-        return any(term.lower() in query_lower for term in business_terms)
-
 class DBAgent:
-    PROMPT = """Eres un Arquitecto SQL Senior especializado en análisis empresarial español. 
+    PROMPT = """Eres un Arquitecto SQL Senior especializado en análisis empresarial español.
+    
+Usa solo las siguientes columnas en tus consultas:
+- cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3
 
-COMPETENCIAS CORE:
-1. Consultas Avanzadas:
-   - CTEs recursivos y Window Functions
-   - Análisis multi-tabla optimizado
-   - Full-text search en español
+Ejemplos para consultas de filas:
+"Dame las 10 primeras empresas de Madrid" ->
+SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3 
+FROM sociedades 
+WHERE nom_provincia = 'Madrid' 
+LIMIT 10;
 
-2. Optimización Query:
-   - Índices específicos para datos empresariales
-   - Particionamiento por provincia/región
-   - Gestión eficiente de batch processing
+Ejemplos para consultas agregadas:
+"¿Cuántas empresas hay en Madrid?" ->
+SELECT COUNT(*) AS total FROM sociedades WHERE nom_provincia = 'Madrid';
 
-3. Validación de Datos:
-   - Normalización de datos empresariales
-   - Detección de duplicados inteligente
-   - Control de integridad referencial
-
-REGLAS DE GENERACIÓN SQL:
-1. Priorizar índices y optimización
-2. Usar CTEs para consultas complejas
-3. Implementar paginación eficiente
-4. Manejar errores y edge cases
-5. Documentar queries generados
-
-OUTPUT REQUERIDO:
-1. Query SQL optimizado
-2. Explicación de optimizaciones
-3. Índices recomendados"""
+"¿Cuál es el porcentaje de empresas que tienen URL versus el total?" ->
+SELECT 100.0 * SUM(CASE WHEN url IS NOT NULL AND TRIM(url) <> '' THEN 1 ELSE 0 END) / COUNT(*) AS porcentaje
+FROM sociedades;
+"""
 
     def __init__(self):
         self.llm = CustomLLM(LLM_MODELS["base_datos"])
 
     def generate_query(self, natural_query: str) -> Dict[str, Any]:
-        response = self.llm(f"{self.PROMPT}\nConsulta: {natural_query}")
-        query = self._extract_sql(response)
+        full_prompt = f"{self.PROMPT}\nConsulta: {natural_query}\nGenera la consulta SQL:"
+        response = self.llm(full_prompt)
+        
+        # Use regex to extract a SQL query starting with SELECT and ending with a semicolon.
+        sql_match = re.search(r'SELECT.*?;', response, re.DOTALL | re.IGNORECASE)
+        if sql_match:
+            query = sql_match.group(0)
+        else:
+            # Fallback query using only the desired columns.
+            query = ("SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, "
+                     "nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3 "
+                     "FROM sociedades LIMIT 10;")
+            
         return {
             "query": query,
-            "explanation": response,
-            "sql_type": self._determine_query_type(query)
+            "explanation": response
         }
-
-    def _extract_sql(self, response: str) -> str:
-        # Implementar extracción de SQL del texto
-        # Para pruebas, se retorna una consulta válida
-        return "SELECT * FROM sociedades LIMIT 10;"
-        # Esto dependerá del formato exacto de respuesta del LLM
-        return ""
-
+    
     def _determine_query_type(self, query: str) -> str:
-        query = query.lower()
-        if "select" in query:
-            return "SELECT"
-        elif "update" in query:
-            return "UPDATE"
-        elif "insert" in query:
-            return "INSERT"
-        return "UNKNOWN"
+        return "default"
 
 class ScrapingAgent:
     PROMPT = """Eres un Ingeniero de Web Scraping Elite especializado en análisis empresarial.
@@ -209,7 +131,8 @@ REGLAS DE SCRAPING:
         self.llm = CustomLLM(LLM_MODELS["scraping"])
 
     def plan_scraping(self, url: str) -> Dict[str, Any]:
-        analysis = self.llm(f"{self.PROMPT}\nURL: {url}")
+        full_prompt = f"{self.PROMPT}\nAnalizar URL: {url}\nGenerar plan de scraping:"
+        analysis = self.llm(full_prompt)
         
         return {
             "strategy": "dynamic" if "javascript" in analysis.lower() else "static",

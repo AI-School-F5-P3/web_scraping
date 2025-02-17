@@ -71,7 +71,6 @@ class CaptchaSolver:
 class RegexPatterns:
     """Patrones avanzados de detección"""
     
-    # Patrones de teléfonos españoles
     PHONES = [
         re.compile(r'(?:\+34|0034|34)?[ -]*(6|7|8|9)[ -]*([0-9][ -]*){8}'),
         re.compile(r'(?:\+34|0034|34)?[ -]*(91|93|95|96|98|99)[ -]*([0-9][ -]*){7}'),
@@ -79,7 +78,6 @@ class RegexPatterns:
         re.compile(r'(?:Contacta|Contacto|Llama):?\s*([0-9\s]{9,})')
     ]
     
-    # Redes sociales con variantes
     SOCIAL = {
         'facebook': [
             re.compile(r'https?://(?:www\.)?facebook\.com/[\w.-]+/?'),
@@ -101,7 +99,6 @@ class RegexPatterns:
         ]
     }
     
-    # Patrones de E-commerce
     ECOMMERCE = [
         re.compile(r'\b(?:carrito|cesta|cart|basket)\b', re.IGNORECASE),
         re.compile(r'\b(?:comprar|buy|purchase)\b', re.IGNORECASE),
@@ -125,19 +122,15 @@ class ProWebScraper:
         for opt in HARDWARE_CONFIG["chrome_options"]:
             options.add_argument(opt)
         options.add_argument(f'user-agent={self.user_agent.random}')
-        
-        # Configuración para GPU
         if HARDWARE_CONFIG["gpu_enabled"]:
             options.add_argument('--enable-gpu-rasterization')
             options.add_argument('--enable-zero-copy')
-        
         return options
 
     def _setup_parallel_processing(self):
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
 
     def scrape_url(self, url: str, company_data: dict) -> dict:
-        """Método principal de scraping con validación de datos existentes"""
         result = {
             'url': url,
             'url_exists': False,
@@ -149,30 +142,23 @@ class ProWebScraper:
             'is_ecommerce': False,
             'validation_score': 0
         }
-
         content = self._get_page_content(url)
         if not content:
             return self._handle_failed_scrape(result)
-
         soup = BeautifulSoup(content, 'html.parser')
         text_content = soup.get_text()
-
         result['validation_score'] = self._validate_content(text_content, company_data)
-        
         if result['validation_score'] > 0:
             result['url_exists'] = True
             result.update(self._extract_all_data(soup, text_content))
-
         return result
 
     def _get_page_content(self, url: str) -> str:
-        """Intenta diferentes métodos para obtener el contenido"""
         methods = [
             self._try_cloudscraper,
             self._try_selenium_undetected,
             self._try_selenium_stealth
         ]
-
         for method in methods:
             try:
                 content = method(url)
@@ -181,7 +167,6 @@ class ProWebScraper:
             except Exception as e:
                 print(f"Method failed: {str(e)}")
                 continue
-
         return None
 
     def _try_cloudscraper(self, url: str) -> str:
@@ -219,7 +204,6 @@ class ProWebScraper:
             "//*[contains(@id, 'cookie-law')]//*[contains(text(), 'Accept')]",
             "//*[contains(@class, 'cookie-banner')]//*[contains(text(), 'Aceptar')]"
         ]
-
         for xpath in cookie_buttons:
             try:
                 button = WebDriverWait(driver, 3).until(
@@ -270,21 +254,17 @@ class ProWebScraper:
             recaptcha_info = self._detect_recaptcha(driver)
             if not recaptcha_info["present"]:
                 return True
-
             solution = self.captcha_solver.solve_recaptcha(
                 recaptcha_info["site_key"],
                 driver.current_url
             )
-
             driver.execute_script(
                 "document.getElementById('g-recaptcha-response').innerHTML = arguments[0]",
                 solution
             )
-
             submit_button = driver.find_element(By.CSS_SELECTOR, 
                 "button[type='submit'], input[type='submit']")
             submit_button.click()
-
             return True
         except Exception as e:
             print(f"Error resolviendo reCAPTCHA: {str(e)}")
@@ -295,21 +275,17 @@ class ProWebScraper:
             hcaptcha_info = self._detect_hcaptcha(driver)
             if not hcaptcha_info["present"]:
                 return True
-
             solution = self.captcha_solver.solve_hcaptcha(
                 hcaptcha_info["site_key"],
                 driver.current_url
             )
-
             driver.execute_script(
                 "document.getElementsByName('h-captcha-response')[0].innerHTML = arguments[0]",
                 solution
             )
-
             submit_button = driver.find_element(By.CSS_SELECTOR, 
                 "button[type='submit'], input[type='submit']")
             submit_button.click()
-
             return True
         except Exception as e:
             print(f"Error resolviendo hCAPTCHA: {str(e)}")
@@ -327,10 +303,8 @@ class ProWebScraper:
     def _validate_content(self, text_content: str, company_data: dict) -> int:
         score = 0
         text_content = text_content.lower()
-
         if company_data.get('nif') and company_data['nif'].lower() in text_content:
             score += 3
-
         if company_data.get('razon_social'):
             razon_social = company_data['razon_social'].lower()
             if razon_social in text_content:
@@ -340,7 +314,6 @@ class ProWebScraper:
                 for keyword in keywords:
                     if len(keyword) > 3 and keyword in text_content:
                         score += 0.5
-
         if company_data.get('domicilio'):
             domicilio = company_data['domicilio'].lower()
             if domicilio in text_content:
@@ -350,13 +323,10 @@ class ProWebScraper:
                 for part in parts:
                     if len(part) > 3 and part in text_content:
                         score += 0.5
-
         if company_data.get('cod_postal') and company_data['cod_postal'] in text_content:
             score += 1
-
         if company_data.get('nom_poblacion') and company_data['nom_poblacion'].lower() in text_content:
             score += 1
-
         return score
 
     def _extract_all_data(self, soup: BeautifulSoup, text_content: str) -> dict:
@@ -378,19 +348,14 @@ class ProWebScraper:
 
     def _extract_social_media(self, soup: BeautifulSoup, text_content: str) -> dict:
         social_media = {}
-        
-        # Buscar enlaces en atributos href
         for network, patterns in self.regex.SOCIAL.items():
             for pattern in patterns:
-                # Buscar en enlaces
                 for link in soup.find_all('a', href=True):
                     href = link['href'].lower()
                     if pattern.search(href):
                         clean_url = re.sub(r'[?#].*$', '', href)
                         social_media[network] = clean_url
                         break
-
-                # Si no se encontró en enlaces, buscar en texto
                 if network not in social_media:
                     matches = pattern.finditer(text_content)
                     for match in matches:
@@ -399,16 +364,12 @@ class ProWebScraper:
                         else:
                             social_media[network] = match.group(0)
                         break
-
         return social_media
 
     def _detect_ecommerce(self, soup: BeautifulSoup, text_content: str) -> bool:
-        # Verificar patrones en texto
         for pattern in self.regex.ECOMMERCE:
             if pattern.search(text_content):
                 return True
-
-        # Verificar elementos HTML típicos de e-commerce
         ecommerce_elements = [
             "//form[contains(@action, 'cart')]",
             "//form[contains(@action, 'checkout')]",
@@ -420,7 +381,6 @@ class ProWebScraper:
             "//div[contains(@class, 'product-price')]",
             "//span[contains(@class, 'price')]"
         ]
-
         for selector in ecommerce_elements:
             try:
                 elements = soup.select(selector)
@@ -428,7 +388,6 @@ class ProWebScraper:
                     return True
             except:
                 continue
-
         return False
 
     def _clean_url(self, url: str) -> str:
@@ -450,7 +409,6 @@ class ProWebScraper:
         return result
 
     def __del__(self):
-        """Limpieza de recursos"""
         try:
             self.executor.shutdown(wait=True)
         except:

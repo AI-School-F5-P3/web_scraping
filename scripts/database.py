@@ -1,5 +1,3 @@
-# database.py
-
 import psycopg2
 import pandas as pd
 from typing import Optional, List, Dict, Any
@@ -21,18 +19,13 @@ class DatabaseManager:
             cursor.execute(f"SET maintenance_work_mem = '{ram_gb//4}MB'")
             cursor.execute(f"SET effective_cache_size = '{ram_gb*3//4}GB'")
             
-            # Verifica si el sistema operativo es macOS
             system = platform.system()
-            
-            # Si es macOS, se debe establecer effective_io_concurrency en 0
             if system == "Darwin":
                 cursor.execute("SET effective_io_concurrency = 0")
             else:
-                # Solo intenta configurarlo en otros sistemas si es necesario
                 try:
                     cursor.execute("SET effective_io_concurrency = 200")
                 except Exception as e:
-                    # Si hay un error con la configuración, lo manejamos de manera silenciosa
                     print(f"Warning: {e} (setting effective_io_concurrency on {system})")
                         
             cursor.execute("SET random_page_cost = 1.1")
@@ -43,7 +36,6 @@ class DatabaseManager:
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(query, params or ())
-                # Chequeamos si la query inicia con SELECT
                 if return_df and query.strip().lower().startswith("select"):
                     columns = [desc[0] for desc in cursor.description]
                     return pd.DataFrame(cursor.fetchall(), columns=columns)
@@ -111,6 +103,25 @@ class DatabaseManager:
         
         return self.batch_insert(df, 'sociedades', insert_columns)
 
+    def get_urls_for_scraping(self, batch_id: str = None, limit: int = 100) -> pd.DataFrame:
+        query = """
+        SELECT cod_infotel, url
+        FROM sociedades
+        WHERE deleted = FALSE 
+        AND url IS NOT NULL
+        AND url_status IS NULL
+        """
+        
+        if batch_id:
+            query += " AND lote_id = %s"
+            params = (batch_id,)
+        else:
+            params = None
+            
+        query += f" LIMIT {limit}"
+        
+        return self.execute_query(query, params, return_df=True)
+
     def update_scraping_results(self, results: List[Dict[str, Any]], batch_id: str) -> Dict[str, Any]:
         try:
             update_query = """
@@ -129,7 +140,7 @@ class DatabaseManager:
                 instagram = %(instagram)s,
                 e_commerce = %(ecommerce)s,
                 fecha_actualizacion = NOW()
-            WHERE url = %(url)s AND lote_id = %(batch_id)s
+            WHERE cod_infotel = %(cod_infotel)s AND lote_id = %(batch_id)s
             """
             
             with self.connection.cursor() as cursor:
@@ -147,7 +158,7 @@ class DatabaseManager:
                         'linkedin': result.get('social_media', {}).get('linkedin'),
                         'instagram': result.get('social_media', {}).get('instagram'),
                         'ecommerce': result.get('is_ecommerce', False),
-                        'url': result.get('url'),
+                        'cod_infotel': result.get('cod_infotel'),
                         'batch_id': batch_id
                     }
                     cursor.execute(update_query, params)
@@ -190,22 +201,3 @@ class DatabaseManager:
             self.execute_query(create_table_query, return_df=False)
         except Exception as e:
             print(f"Error creating table: {e}")
-
-    def get_urls_for_scraping(self, batch_id: str = None, limit: int = 100) -> pd.DataFrame:
-        query = """
-        SELECT id, cod_infotel, url
-        FROM sociedades
-        WHERE deleted = FALSE 
-        AND url IS NOT NULL
-        AND url_status IS NULL
-        """
-        
-        if batch_id:
-            query += " AND lote_id = %s"
-            params = (batch_id,)
-        else:
-            params = None
-            
-        query += f" LIMIT {limit}"
-        
-        return self.execute_query(query, params, return_df=True)
