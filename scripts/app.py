@@ -145,11 +145,13 @@ class EnterpriseApp:
             st.info("👆 Carga un archivo para ver las estadísticas")
             return
         
-        print(st.session_state.current_batch['data'].columns)
+        # print(st.session_state.current_batch['data'].columns)
         
-        st.session_state.current_batch['data'].columns = st.session_state.current_batch['data'].columns.str.strip()
+        # st.session_state.current_batch['data'].columns = st.session_state.current_batch['data'].columns.str.strip()
+        df = st.session_state.current_batch["data"]
+        df.columns = df.columns.str.strip().str.lower()
         
-        print(st.session_state.current_batch['data'].columns)
+        # print(st.session_state.current_batch['data'].columns)
         # Estadísticas generales
         col1, col2, col3, col4 = st.columns(4)
         
@@ -157,12 +159,12 @@ class EnterpriseApp:
             st.metric("Total Registros", f"{st.session_state.current_batch['total_records']:,}")
         
         total_with_web = len(st.session_state.current_batch['data'][
-            st.session_state.current_batch['data']['URL'].notna()
+            st.session_state.current_batch['data']['url'].notna()
         ])
         with col2:
             st.metric("Con Web", f"{total_with_web:,}")
         
-        unique_provinces = st.session_state.current_batch['data']['NOM_PROVINCIA'].nunique()
+        unique_provinces = st.session_state.current_batch['data']['nom_provincia'].nunique()
         with col3:
             st.metric("Provincias", unique_provinces)
         
@@ -174,7 +176,7 @@ class EnterpriseApp:
         
         with col1:
             st.subheader("Distribución por Provincia")
-            prov_counts = st.session_state.current_batch['data']['NOM_PROVINCIA'].value_counts()
+            prov_counts = st.session_state.current_batch['data']['nom_provincia'].value_counts()
             st.bar_chart(prov_counts)
             
         with col2:
@@ -263,20 +265,34 @@ class EnterpriseApp:
         """Procesa consultas en lenguaje natural"""
         try:
             with st.spinner("Procesando consulta..."):
-                # Generar SQL
-                query_info = self.db_agent.generate_query(query)
+                # Primero usar el orchestrator
+                orchestrated_response = self.orchestrator.process(query)
                 
-                # Ejecutar consulta
-                results = self.db.execute_query(
-                    query_info["query"],
-                    return_df=True
-                )
+                if not orchestrated_response["valid"]:
+                    st.error(orchestrated_response["response"])
+                    return
                 
-                # Guardar resultados
-                st.session_state.last_query = {
-                    "sql": query_info["query"],
-                    "results": results
-                }
+                query_info = None  # Inicializamos la variable
+                
+                # El orchestrator decide qué agentes usar
+                if "SQL" in orchestrated_response["response"]:
+                    # Generar SQL
+                    query_info = self.db_agent.generate_query(query)
+                    
+                if "scraping" in orchestrated_response["response"]:
+                    if query_info is None:
+                        query_info = self.db_agent.generate_query(query)
+                    # Ejecutar consulta
+                    results = self.db.execute_query(
+                        query_info["query"],
+                        return_df=True
+                    )
+
+                    # Guardar resultados
+                    st.session_state.last_query = {
+                        "sql": query_info["query"],
+                        "results": results
+                    }
                 
         except Exception as e:
             st.error(f"Error al procesar consulta: {str(e)}")
@@ -346,7 +362,7 @@ class EnterpriseApp:
             df = st.session_state.current_batch['data'].copy()
             
             if provincia != "Todas":
-                df = df[df['NOM_PROVINCIA'] == provincia]
+                df = df[df['nom_provincia'] == provincia]
                 
             if has_web:
                 df = df[df['URL'].notna()]
