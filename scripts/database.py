@@ -5,13 +5,14 @@ import pandas as pd
 from typing import Optional, List, Dict, Any
 from psycopg2.extras import execute_values
 from config import DB_CONFIG, HARDWARE_CONFIG, TIMEOUT_CONFIG
+import platform
 
 class DatabaseManager:
     def __init__(self):
-        # DB_CONFIG["client_encoding"] = "UTF8"
         self.connection = psycopg2.connect(**DB_CONFIG)
         self.connection.autocommit = True
         self._optimize_connection()
+        self.create_table_if_not_exists()
 
     def _optimize_connection(self):
         with self.connection.cursor() as cursor:
@@ -19,7 +20,21 @@ class DatabaseManager:
             cursor.execute(f"SET work_mem = '{ram_gb//4}MB'")
             cursor.execute(f"SET maintenance_work_mem = '{ram_gb//4}MB'")
             cursor.execute(f"SET effective_cache_size = '{ram_gb*3//4}GB'")
-            cursor.execute("SET effective_io_concurrency = 0")
+            
+            # Verifica si el sistema operativo es macOS
+            system = platform.system()
+            
+            # Si es macOS, se debe establecer effective_io_concurrency en 0
+            if system == "Darwin":
+                cursor.execute("SET effective_io_concurrency = 0")
+            else:
+                # Solo intenta configurarlo en otros sistemas si es necesario
+                try:
+                    cursor.execute("SET effective_io_concurrency = 200")
+                except Exception as e:
+                    # Si hay un error con la configuración, lo manejamos de manera silenciosa
+                    print(f"Warning: {e} (setting effective_io_concurrency on {system})")
+                        
             cursor.execute("SET random_page_cost = 1.1")
             cursor.execute("SET cpu_tuple_cost = 0.03")
             cursor.execute("SET cpu_index_tuple_cost = 0.01")
@@ -28,10 +43,13 @@ class DatabaseManager:
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(query, params or ())
-                if return_df:
+                # Chequeamos si la query inicia con SELECT
+                if return_df and query.strip().lower().startswith("select"):
                     columns = [desc[0] for desc in cursor.description]
                     return pd.DataFrame(cursor.fetchall(), columns=columns)
-                return cursor.fetchall()
+                elif query.strip().lower().startswith("select"):
+                    return cursor.fetchall()
+                return None
         except Exception as e:
             self._handle_db_error(e, query)
             return None
@@ -137,6 +155,41 @@ class DatabaseManager:
             return {"status": "success", "updated": len(results)}
         except Exception as e:
             return {"status": "error", "message": str(e)}
+        
+    def create_table_if_not_exists(self):
+        create_table_query = """
+        CREATE TABLE IF NOT EXISTS sociedades (
+            id SERIAL PRIMARY KEY,
+            cod_infotel VARCHAR(255) NOT NULL,
+            nif VARCHAR(255),
+            razon_social VARCHAR(255),
+            domicilio TEXT,
+            cod_postal VARCHAR(50),
+            nom_poblacion VARCHAR(255),
+            nom_provincia VARCHAR(255),
+            url TEXT,
+            lote_id VARCHAR(255),
+            created_by VARCHAR(255),
+            url_exists BOOLEAN DEFAULT FALSE,
+            url_limpia TEXT,
+            url_status VARCHAR(255),
+            url_status_mensaje TEXT,
+            telefono_1 VARCHAR(50),
+            telefono_2 VARCHAR(50),
+            telefono_3 VARCHAR(50),
+            facebook VARCHAR(255),
+            twitter VARCHAR(255),
+            linkedin VARCHAR(255),
+            instagram VARCHAR(255),
+            e_commerce BOOLEAN DEFAULT FALSE,
+            fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            deleted BOOLEAN DEFAULT FALSE
+        );
+        """
+        try:
+            self.execute_query(create_table_query, return_df=False)
+        except Exception as e:
+            print(f"Error creating table: {e}")
 
     def get_urls_for_scraping(self, batch_id: str = None, limit: int = 100) -> pd.DataFrame:
         query = """
