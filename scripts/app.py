@@ -45,6 +45,9 @@ class EnterpriseApp:
             if df is not None and not df.empty:
                 # Normalizar nombres de columnas a minúsculas
                 df.columns = df.columns.str.strip().str.lower()
+                # Check for duplicates by a unique identifier (e.g., NIF or cod_infotel)
+                if 'cod_infotel' in df.columns:
+                    df = df.drop_duplicates(subset=['cod_infotel'], keep='first')
                 st.session_state.current_batch = {
                     "id": "loaded_from_db",
                     "data": df,
@@ -60,7 +63,7 @@ class EnterpriseApp:
     def render_sidebar(self):
         """Renderiza la barra lateral con opciones de carga y filtros"""
         with st.sidebar:
-            # st.image("logo.png", width=200)  # Asegúrate de tener el logo en tu directorio
+            st.image("images/logo.png", width=200)  # Asegúrate de tener el logo en tu directorio
             st.title("Control Panel")
             
             # Sección de carga de archivos
@@ -93,7 +96,7 @@ class EnterpriseApp:
                 # Limpiar la variable que contiene los datos cargados
                 st.session_state.current_batch = None
                 st.success("Base de datos reiniciada exitosamente.")
-                st.experimental_rerun()  # Fuerza la recarga de la app
+                st.rerun()  # Fuerza la recarga de la app
 
     def render_main_content(self):
         """Renderiza el contenido principal"""
@@ -141,7 +144,7 @@ class EnterpriseApp:
                 df.columns = [col.strip().lower() for col in df.columns]
                 
                 # Guardar en base de datos sin batch_id ni created_by
-                result = self.db.save_batch(df)
+                result = self.db.save_batch(df)  # Add a parameter to check duplicates
                 
                 st.write("Resultado de save_batch:", result)
                 
@@ -326,10 +329,15 @@ class EnterpriseApp:
 
             def scrape_row(idx, row):
                 url_display = row['url'] if pd.notna(row['url']) else "URL no disponible"
-                # Aquí podrías actualizar un log específico para esta tarea si se requiere.
                 result = self.scraping_agent.plan_scraping(row['url'])
-                result['cod_infotel'] = row['cod_infotel']
-                result['original_url'] = row['url']  # Guardamos la URL original para comparación
+                # Añadir más información relevante al resultado
+                result.update({
+                    'cod_infotel': row['cod_infotel'],
+                    'original_url': row['url'],
+                    'phones_found': len(result.get('phones', [])),
+                    'social_media_found': len(result.get('social_media', {})),
+                    'has_ecommerce': result.get('is_ecommerce', False)
+                })
                 return idx, result
 
             with ThreadPoolExecutor(max_workers=8) as executor:
@@ -344,19 +352,38 @@ class EnterpriseApp:
             
             end_time = time.perf_counter()
             elapsed = end_time - start_time
-            st.write(f"Tiempo total de scraping: {elapsed:.2f} segundos")
 
-            # Mostrar resultados detallados en un DataFrame temporal
+            # Mostrar resultados en formato más útil
+            st.subheader("Resultados del Web Scraping")
+            
+            # Métricas resumidas
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("URLs Procesadas", len(results))
+            with col2:
+                st.metric("Tiempo Total", f"{elapsed:.2f}s")
+            with col3:
+                st.metric("URLs Válidas", sum(1 for r in results if r.get('url_exists', False)))
+            with col4:
+                st.metric("Con E-commerce", sum(1 for r in results if r.get('has_ecommerce', False)))
+
+            # Tabla de resultados detallados
             results_df = pd.DataFrame(results)
-            st.subheader("Resultados del Web Scraping (previo a actualizar la BD)")
-            st.dataframe(results_df)
+            st.dataframe(
+                results_df[[
+                    'cod_infotel', 'original_url', 'url_exists', 
+                    'phones_found', 'social_media_found', 'has_ecommerce'
+                ]],
+                use_container_width=True
+            )
 
-            # Preguntar al usuario si desea aplicar los cambios a la BD
+            # Preguntar al usuario si desea aplicar los cambios
             if st.checkbox("Actualizar la base de datos con los nuevos datos"):
                 update_result = self.db.update_scraping_results(results=results)
                 st.success(f"✅ Scraping completado: {len(results)} URLs procesadas y BD actualizada.")
             else:
                 st.info("No se actualizaron los registros en la BD.")
+                
         except Exception as e:
             st.error(f"❌ Error durante el scraping: {str(e)}")
 
