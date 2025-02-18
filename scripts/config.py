@@ -16,20 +16,23 @@ DB_CONFIG = {
 
 # Hardware Config
 HARDWARE_CONFIG = {
-    "gpu_memory": "24GB",
-    "total_ram": "128GB",
-    "max_workers": 16,
-    "gpu_enabled": True,
-    "cuda_visible_devices": "0",  # Para NVIDIA GPU
+    "gpu_memory": "0GB",  # Sin GPU dedicada
+    "total_ram": "12GB",  # Dejando margen para el sistema operativo
+    "max_workers": 4,     # Para un Ryzen 7 5700U (8 núcleos con SMT)
+    "gpu_enabled": False, # GPU integrada Radeon no es ideal para ML
+    "cuda_visible_devices": "",  # No aplica
     "chrome_options": [
         "--headless",
         "--no-sandbox",
         "--disable-gpu",
         "--disable-dev-shm-usage",
-        "--enable-gpu-rasterization",
         "--enable-zero-copy",
         "--ignore-certificate-errors",
-        "--disable-software-rasterizer"
+        "--disable-software-rasterizer",
+        "--memory-pressure-off",
+        "--js-flags=--expose-gc",  # Optimización de memoria JavaScript
+        "--disable-notifications",
+        "--disable-extensions"
     ]
 }
 
@@ -48,9 +51,26 @@ PROVINCIAS_ESPANA = [
 # Configuración de Ollama
 OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
 LLM_MODELS = {
-    "orquestador": "deepseek-r1:14b",
-    "base_datos": "qwen2.5:14b",
-    "scraping": "gemma2:27b"
+    "orquestador": "mistral:latest",  # Cambiado a mistral
+    "base_datos": "mistral:latest",   # Cambiado a mistral
+    "scraping": "mistral:latest"     # Cambiado a mistral
+}
+# Parámetros optimizados para Mistral 7B Instruct
+OLLAMA_PARAMS = {
+    "num_ctx": 4096,         # Aumentado para mejor contexto
+    "num_thread": 4,         # Mantenido para tu hardware
+    "repeat_penalty": 1.1,   
+    "temperature": 0.7,      
+    "top_k": 40,            # Aumentado para mejor generación
+    "top_p": 0.9,
+    "system": "Eres un asistente experto en extraer información de contacto de páginas web de empresas."  # Añadido prompt del sistema
+}
+
+# Timeouts y reintentos
+TIMEOUT_CONFIG = {
+    "request_timeout": 60,    # Aumentado para dar más tiempo en hardware limitado
+    "retry_attempts": 2,      # Reducido para evitar sobrecarga
+    "retry_delay": 10
 }
 
 # Columnas requeridas para ingesta
@@ -65,12 +85,7 @@ REQUIRED_COLUMNS = [
     "URL"
 ]
 
-# Timeouts y reintentos
-TIMEOUT_CONFIG = {
-    "request_timeout": 30,
-    "retry_attempts": 3,
-    "retry_delay": 5
-}
+
 
 # Estados de URL
 URL_STATUS_MESSAGES = {
