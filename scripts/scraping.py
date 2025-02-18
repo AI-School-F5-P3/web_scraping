@@ -26,7 +26,7 @@ class CaptchaSolver:
         self.two_captcha = TwoCaptcha('TU_API_KEY_2CAPTCHA')
         self.use_2captcha = True
         self.anticaptcha_key = 'TU_API_KEY_ANTICAPTCHA'
-
+ 
     def solve_recaptcha(self, site_key: str, url: str) -> str:
         try:
             if self.use_2captcha:

@@ -44,7 +44,7 @@ PROVINCIAS_ESPANA = [
     'Sevilla', 'Soria', 'Tarragona', 'Teruel', 'Toledo', 'Valencia', 'Valladolid',
     'Vizcaya', 'Zamora', 'Zaragoza'
 ]
-
+ 
 # Configuración de Ollama
 OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
 LLM_MODELS = {
