@@ -9,6 +9,7 @@ from database import DatabaseManager
 from scraping import ProWebScraper
 from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA
 import matplotlib.pyplot as plt
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class EnterpriseApp:
     def __init__(self):
@@ -86,6 +87,13 @@ class EnterpriseApp:
                 
                 if st.button("Aplicar Filtros"):
                     self.apply_filters(selected_provincia, has_web, has_ecommerce)
+                    
+            if st.button("Borrar BBDD"):
+                self.db.reset_database()
+                # Limpiar la variable que contiene los datos cargados
+                st.session_state.current_batch = None
+                st.success("Base de datos reiniciada exitosamente.")
+                st.experimental_rerun()  # Fuerza la recarga de la app
 
     def render_main_content(self):
         """Renderiza el contenido principal"""
@@ -119,7 +127,7 @@ class EnterpriseApp:
                 if file.name.endswith('.csv'):
                     df = pd.read_csv(file, header=0, sep=';', encoding='utf-8')
                 else:
-                    df = pd.read_excel(file, header=0, sep=';', encoding='utf-8')
+                    df = pd.read_excel(file, header=0)
                     
                 st.write("Columnas detectadas:", df.columns.tolist())
                 
@@ -132,17 +140,13 @@ class EnterpriseApp:
                 # Normalizar nombres de columnas
                 df.columns = [col.strip().lower() for col in df.columns]
                 
-                # Generar ID de lote
-                batch_id = f"BATCH_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                
-                # Guardar en base de datos
-                result = self.db.save_batch(df, batch_id, st.session_state.get("user", "streamlit_user"))
+                # Guardar en base de datos sin batch_id ni created_by
+                result = self.db.save_batch(df)
                 
                 st.write("Resultado de save_batch:", result)
                 
                 if result["status"] == "success":
                     st.session_state.current_batch = {
-                        "id": batch_id,
                         "data": df,
                         "total_records": len(df),
                         "timestamp": datetime.now()
@@ -180,19 +184,19 @@ class EnterpriseApp:
             st.metric("Provincias", unique_provinces)
         
         with col4:
-            st.metric("Lote", st.session_state.current_batch['id'])
+            st.metric("Última actualización", st.session_state.current_batch['timestamp'].strftime("%Y-%m-%d %H:%M:%S"))
         
         # Gráficos
         col1, col2 = st.columns(2)
         
         with col1:
             st.subheader("Distribución por Provincia")
-            prov_counts = st.session_state.current_batch['data']['nom_provincia'].value_counts()
+            prov_counts = df['nom_provincia'].value_counts()
             st.bar_chart(prov_counts)
             
         with col2:
             st.subheader("Estado de URLs")
-            valid_url = st.session_state.current_batch['data']['url'].apply(
+            valid_url = df['url'].apply(
                 lambda x: isinstance(x, str) and x.strip() != '' and 
                           (x.strip().lower().startswith("http://") or 
                            x.strip().lower().startswith("https://") or 
@@ -305,41 +309,54 @@ class EnterpriseApp:
             st.error(f"Error al procesar consulta: {str(e)}")
 
     def process_scraping(self, limit: int):
-        """Procesa el scraping de URLs"""
+        """Procesa el scraping de URLs utilizando procesamiento paralelo y muestra detalles."""
         try:
-            urls_df = self.db.get_urls_for_scraping(
-                batch_id=st.session_state.current_batch["id"],
-                limit=limit
-            )
-            
+            urls_df = self.db.get_urls_for_scraping(limit=limit)
             if urls_df.empty:
                 st.warning("No hay URLs pendientes de procesar")
                 return
-            
+
+            total_urls = len(urls_df)
             progress_bar = st.progress(0)
             status_text = st.empty()
-            total_urls = len(urls_df)
             results = []
-            
-            for idx, row in urls_df.iterrows():
-                progress = (idx + 1) / total_urls
-                progress_bar.progress(progress)
-                status_text.text(f"Procesando URL {idx + 1}/{total_urls}: {row['url']}")
-                
+
+            # Registrar tiempo de inicio
+            start_time = time.perf_counter()
+
+            def scrape_row(idx, row):
+                url_display = row['url'] if pd.notna(row['url']) else "URL no disponible"
+                # Aquí podrías actualizar un log específico para esta tarea si se requiere.
                 result = self.scraping_agent.plan_scraping(row['url'])
-                # Incluir información de la empresa para actualizar en la BD
                 result['cod_infotel'] = row['cod_infotel']
-                results.append(result)
-                
-                time.sleep(0.5)
+                result['original_url'] = row['url']  # Guardamos la URL original para comparación
+                return idx, result
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = {executor.submit(scrape_row, idx, row): idx for idx, row in urls_df.iterrows()}
+                completed = 0
+                for future in as_completed(futures):
+                    idx, result = future.result()
+                    results.append(result)
+                    completed += 1
+                    progress_bar.progress(completed / total_urls)
+                    status_text.text(f"Procesando URL {completed}/{total_urls}")
             
-            self.db.update_scraping_results(
-                results=results,
-                batch_id=st.session_state.current_batch["id"]
-            )
-            
-            st.success(f"✅ Scraping completado: {len(results)} URLs procesadas")
-            
+            end_time = time.perf_counter()
+            elapsed = end_time - start_time
+            st.write(f"Tiempo total de scraping: {elapsed:.2f} segundos")
+
+            # Mostrar resultados detallados en un DataFrame temporal
+            results_df = pd.DataFrame(results)
+            st.subheader("Resultados del Web Scraping (previo a actualizar la BD)")
+            st.dataframe(results_df)
+
+            # Preguntar al usuario si desea aplicar los cambios a la BD
+            if st.checkbox("Actualizar la base de datos con los nuevos datos"):
+                update_result = self.db.update_scraping_results(results=results)
+                st.success(f"✅ Scraping completado: {len(results)} URLs procesadas y BD actualizada.")
+            else:
+                st.info("No se actualizaron los registros en la BD.")
         except Exception as e:
             st.error(f"❌ Error durante el scraping: {str(e)}")
 

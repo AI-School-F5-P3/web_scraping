@@ -91,15 +91,11 @@ class DatabaseManager:
         except Exception as e:
             return {"status": "error", "message": str(e), "errors": errors}
 
-    def save_batch(self, df: pd.DataFrame, batch_id: str, created_by: str) -> Dict[str, Any]:
+    def save_batch(self, df: pd.DataFrame) -> Dict[str, Any]:
         insert_columns = [
             'cod_infotel', 'nif', 'razon_social', 'domicilio', 'cod_postal',
-            'nom_poblacion', 'nom_provincia', 'url', 'lote_id', 'created_by'
+            'nom_poblacion', 'nom_provincia', 'url'
         ]
-        
-        df = df.copy()
-        df['lote_id'] = batch_id
-        df['created_by'] = created_by
         
         return self.batch_insert(df, 'sociedades', insert_columns)
 
@@ -111,18 +107,11 @@ class DatabaseManager:
         AND url IS NOT NULL
         AND url_status IS NULL
         """
-        
-        if batch_id:
-            query += " AND lote_id = %s"
-            params = (batch_id,)
-        else:
-            params = None
             
         query += f" LIMIT {limit}"
-        
-        return self.execute_query(query, params, return_df=True)
+        return self.execute_query(query, return_df=True)
 
-    def update_scraping_results(self, results: List[Dict[str, Any]], batch_id: str) -> Dict[str, Any]:
+    def update_scraping_results(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
         try:
             update_query = """
             UPDATE sociedades 
@@ -138,9 +127,10 @@ class DatabaseManager:
                 twitter = %(twitter)s,
                 linkedin = %(linkedin)s,
                 instagram = %(instagram)s,
+                youtube = %(youtube)s,
                 e_commerce = %(ecommerce)s,
                 fecha_actualizacion = NOW()
-            WHERE cod_infotel = %(cod_infotel)s AND lote_id = %(batch_id)s
+            WHERE cod_infotel = %(cod_infotel)s
             """
             
             with self.connection.cursor() as cursor:
@@ -157,42 +147,43 @@ class DatabaseManager:
                         'twitter': result.get('social_media', {}).get('twitter'),
                         'linkedin': result.get('social_media', {}).get('linkedin'),
                         'instagram': result.get('social_media', {}).get('instagram'),
+                        'youtube': result.get('social_media', {}).get('youtube'),
                         'ecommerce': result.get('is_ecommerce', False),
-                        'cod_infotel': result.get('cod_infotel'),
-                        'batch_id': batch_id
+                        'cod_infotel': result.get('cod_infotel')
                     }
                     cursor.execute(update_query, params)
                     
             return {"status": "success", "updated": len(results)}
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
         
     def create_table_if_not_exists(self):
         create_table_query = """
         CREATE TABLE IF NOT EXISTS sociedades (
             id SERIAL PRIMARY KEY,
-            cod_infotel VARCHAR(255) NOT NULL,
-            nif VARCHAR(255),
+            cod_infotel INTEGER NOT NULL,
+            nif VARCHAR(11),
             razon_social VARCHAR(255),
-            domicilio TEXT,
-            cod_postal VARCHAR(50),
-            nom_poblacion VARCHAR(255),
-            nom_provincia VARCHAR(255),
-            url TEXT,
-            lote_id VARCHAR(255),
-            created_by VARCHAR(255),
-            url_exists BOOLEAN DEFAULT FALSE,
-            url_limpia TEXT,
-            url_status VARCHAR(255),
-            url_status_mensaje TEXT,
-            telefono_1 VARCHAR(50),
-            telefono_2 VARCHAR(50),
-            telefono_3 VARCHAR(50),
+            domicilio VARCHAR(255),
+            cod_postal VARCHAR(5),
+            nom_poblacion VARCHAR(100),
+            nom_provincia VARCHAR(100),
+            url VARCHAR(255),
+            url_valida VARCHAR(255),
+            url_exists BOOLEAN DEFAULT FALSE NOT NULL,
+            url_limpia VARCHAR(255),
+            url_status INTEGER,
+            url_status_mensaje VARCHAR(255),
+            telefono_1 VARCHAR(16),
+            telefono_2 VARCHAR(16),
+            telefono_3 VARCHAR(16),
             facebook VARCHAR(255),
             twitter VARCHAR(255),
             linkedin VARCHAR(255),
             instagram VARCHAR(255),
-            e_commerce BOOLEAN DEFAULT FALSE,
+            youtube VARCHAR(255),
+            e_commerce BOOLEAN DEFAULT FALSE NOT NULL,
             fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             deleted BOOLEAN DEFAULT FALSE
         );
@@ -201,3 +192,8 @@ class DatabaseManager:
             self.execute_query(create_table_query, return_df=False)
         except Exception as e:
             print(f"Error creating table: {e}")
+            
+    def reset_database(self):
+        drop_query = "DROP TABLE IF EXISTS sociedades;"
+        self.execute_query(drop_query, return_df=False)
+        self.create_table_if_not_exists()

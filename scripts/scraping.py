@@ -23,9 +23,9 @@ from config import HARDWARE_CONFIG, TIMEOUT_CONFIG
 
 class CaptchaSolver:
     def __init__(self):
-        self.two_captcha = TwoCaptcha('TU_API_KEY_2CAPTCHA')
+        self.two_captcha = TwoCaptcha('9be4f75c0fc5c412562b3be7fecbdbe4')
         self.use_2captcha = True
-        self.anticaptcha_key = 'TU_API_KEY_ANTICAPTCHA'
+        self.anticaptcha_key = '9be4f75c0fc5c412562b3be7fecbdbe4'
 
     def solve_recaptcha(self, site_key: str, url: str) -> str:
         try:
@@ -71,6 +71,7 @@ class CaptchaSolver:
 class RegexPatterns:
     """Patrones avanzados de detección"""
     
+    # Patrones de teléfonos españoles
     PHONES = [
         re.compile(r'(?:\+34|0034|34)?[ -]*(6|7|8|9)[ -]*([0-9][ -]*){8}'),
         re.compile(r'(?:\+34|0034|34)?[ -]*(91|93|95|96|98|99)[ -]*([0-9][ -]*){7}'),
@@ -78,6 +79,7 @@ class RegexPatterns:
         re.compile(r'(?:Contacta|Contacto|Llama):?\s*([0-9\s]{9,})')
     ]
     
+    # Redes sociales con variantes, agregamos YouTube
     SOCIAL = {
         'facebook': [
             re.compile(r'https?://(?:www\.)?facebook\.com/[\w.-]+/?'),
@@ -96,15 +98,21 @@ class RegexPatterns:
         'instagram': [
             re.compile(r'https?://(?:www\.)?instagram\.com/[\w._]+/?'),
             re.compile(r'(?:Instagram|IG):\s*@?([\w._]+)')
+        ],
+        'youtube': [
+            re.compile(r'https?://(?:www\.)?youtube\.com/[\w-]+/?'),
+            re.compile(r'(?:YouTube|YT):\s*@?([\w-]+)')
         ]
     }
     
+    # Palabras clave para detectar e-commerce, ampliamos un poco
     ECOMMERCE = [
         re.compile(r'\b(?:carrito|cesta|cart|basket)\b', re.IGNORECASE),
         re.compile(r'\b(?:comprar|buy|purchase)\b', re.IGNORECASE),
         re.compile(r'\b(?:checkout|pago|payment)\b', re.IGNORECASE),
         re.compile(r'\b(?:tienda|shop|store)\b', re.IGNORECASE),
-        re.compile(r'\b(?:añadir|add)\s+(?:al|to)\s+(?:carrito|cart)\b', re.IGNORECASE)
+        re.compile(r'\b(?:añadir|add)\s+(?:al|to)\s+(?:carrito|cart)\b', re.IGNORECASE),
+        re.compile(r'\b(?:shopping)\b', re.IGNORECASE)
     ]
 
 class ProWebScraper:

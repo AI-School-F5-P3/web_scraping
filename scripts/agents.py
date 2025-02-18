@@ -39,6 +39,9 @@ class CustomLLM(LLM):
             return response.json().get('response', '')
         except Exception as e:
             return f"Error: {str(e)}"
+        
+    def invoke(self, prompt: str, stop: List[str] = None) -> str:
+        return self._call(prompt, stop)
 
     @property
     def _llm_type(self) -> str:
@@ -62,7 +65,7 @@ LIMIT 10;
 
 Ejemplos para consultas agregadas:
 "¿Cuántas empresas hay en Madrid?" ->
-SELECT COUNT(*) AS total FROM sociedades WHERE nom_provincia = 'Madrid';
+SELECT COUNT(*) AS total FROM sociedades WHERE nom_provincia ILIKE 'Madrid';
 
 "¿Cuál es el porcentaje de empresas que tienen URL versus el total?" ->
 SELECT 100.0 * SUM(CASE WHEN url IS NOT NULL AND TRIM(url) <> '' THEN 1 ELSE 0 END) / COUNT(*) AS porcentaje
@@ -74,7 +77,7 @@ FROM sociedades;
 
     def generate_query(self, natural_query: str) -> Dict[str, Any]:
         full_prompt = f"{self.PROMPT}\nConsulta: {natural_query}\nGenera la consulta SQL:"
-        response = self.llm(full_prompt)
+        response = self.llm.invoke(full_prompt)
         
         # Use regex to extract a SQL query starting with SELECT and ending with a semicolon.
         sql_match = re.search(r'SELECT.*?;', response, re.DOTALL | re.IGNORECASE)
