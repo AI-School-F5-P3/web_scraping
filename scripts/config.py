@@ -51,19 +51,29 @@ PROVINCIAS_ESPANA = [
 # Configuración de Ollama
 OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
 LLM_MODELS = {
-    "orquestador": "mistral:latest",  # Cambiado a mistral
-    "base_datos": "mistral:latest",   # Cambiado a mistral
-    "scraping": "mistral:latest"     # Cambiado a mistral
+    "orquestador": "mistral:latest",  # Unificado a latest
+    "base_datos": "mistral:latest",   # Unificado a latest
+    "scraping": "mistral:latest"      # Unificado a latest
 }
 # Parámetros optimizados para Mistral 7B Instruct
 OLLAMA_PARAMS = {
-    "num_ctx": 4096,         # Aumentado para mejor contexto
+    "num_ctx": 2048,         # Reducido para mejor estabilidad
     "num_thread": 4,         # Mantenido para tu hardware
     "repeat_penalty": 1.1,   
-    "temperature": 0.7,      
-    "top_k": 40,            # Aumentado para mejor generación
+    "temperature": 0.7,
+    "top_k": 40,
     "top_p": 0.9,
-    "system": "Eres un asistente experto en extraer información de contacto de páginas web de empresas."  # Añadido prompt del sistema
+    "num_gpu": 0,           # Añadido para explícitamente deshabilitar GPU
+    "seed": 42,             # Añadido para consistencia
+    "num_predict": 256,     # Añadido para limitar longitud de respuesta
+    "stop": ["</answer>", "Human:", "Assistant:"],  # Tokens de parada
+    "system": """Eres un asistente experto en extraer información de contacto de páginas web de empresas españolas.
+                Tu tarea es identificar y extraer de forma precisa:
+                - Teléfonos
+                - Emails
+                - Direcciones físicas
+                - Redes sociales
+                - Formularios de contacto"""
 }
 
 # Timeouts y reintentos

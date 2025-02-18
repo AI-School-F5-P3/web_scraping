@@ -48,14 +48,34 @@ def scrape_website(request: UserRequest):
     """
     result = scraping_agent.plan_scraping(request.query)
     return result
+import streamlit as st
+import pandas as pd
+from datetime import datetime
+import time
+import requests
+import logging
+from agents import OrchestratorAgent, DBAgent, ScrapingAgent
+from database import DatabaseManager
+from scraping import ProWebScraper
+from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA, OLLAMA_ENDPOINT
+
+# Configuración del logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
+
 class EnterpriseApp:
     def __init__(self):
         self.init_session_state()
+        self.check_llm_status(optional=True)  # Hacemos la verificación opcional
         self.db = DatabaseManager()
         self.scraper = ProWebScraper()
         self.setup_agents()
-        
-        # Nuevo: cargar datos de la BD si no hay nada en session_state
         self.load_data_from_db()
         
         st.set_page_config(
@@ -64,6 +84,83 @@ class EnterpriseApp:
             layout="wide",
             initial_sidebar_state="expanded"
         )
+
+    def check_llm_status(self, optional=True):
+        """
+        Verifica que el modelo Mistral esté funcionando correctamente
+        
+        Args:
+            optional (bool): Si es True, no lanzará una excepción si falla
+        """
+        try:
+            # Intenta hacer una petición simple a Ollama con timeout más largo
+            response = requests.post(
+                OLLAMA_ENDPOINT,
+                json={
+                    "model": "mistral",
+                    "prompt": "test",
+                    "stream": False
+                },
+                timeout=15  # Aumentamos el timeout a 15 segundos
+            )
+            
+            if response.status_code == 200:
+                logging.info("✅ Mistral LLM está funcionando correctamente")
+                st.session_state.llm_status = "operational"
+            else:
+                error_msg = f"❌ Error al conectar con Mistral LLM: Status code {response.status_code}"
+                logging.error(error_msg)
+                st.session_state.llm_status = "error"
+                if not optional:
+                    raise Exception(error_msg)
+                
+        except requests.exceptions.Timeout:
+            error_msg = "❌ Timeout al conectar con Ollama. El servicio está tardando demasiado en responder."
+            logging.error(error_msg)
+            st.session_state.llm_status = "timeout"
+            if not optional:
+                raise Exception(error_msg)
+                
+        except requests.exceptions.ConnectionError:
+            error_msg = "❌ No se pudo conectar con Ollama. ¿Está el servicio en ejecución?"
+            logging.error(error_msg)
+            st.session_state.llm_status = "connection_error"
+            if not optional:
+                raise Exception(error_msg)
+            
+        except Exception as e:
+            error_msg = f"❌ Error inesperado al verificar Mistral LLM: {str(e)}"
+            logging.error(error_msg)
+            st.session_state.llm_status = "unknown_error"
+            if not optional:
+                raise Exception(error_msg)
+
+    def render_sidebar(self):
+        """Renderiza la barra lateral con opciones de carga y filtros"""
+        with st.sidebar:
+            # Mostrar estado del LLM y botón para reintento
+            st.subheader("🤖 Estado del LLM")
+            
+            llm_status = st.session_state.get("llm_status", "unknown")
+            
+            if llm_status == "operational":
+                st.success("✅ LLM Operativo")
+            elif llm_status == "timeout":
+                st.error("❌ Timeout en LLM")
+                if st.button("Reintentar conexión"):
+                    self.check_llm_status(optional=True)
+            elif llm_status == "connection_error":
+                st.error("❌ No se puede conectar con Ollama")
+                if st.button("Reintentar conexión"):
+                    self.check_llm_status(optional=True)
+            elif llm_status == "error":
+                st.error("❌ Error en LLM")
+                if st.button("Reintentar conexión"):
+                    self.check_llm_status(optional=True)
+            else:
+                st.error("❌ Estado desconocido del LLM")
+                if st.button("Reintentar conexión"):
+                    self.check_llm_status(optional=True)
 
     def init_session_state(self):
         """Inicializa variables de estado"""
@@ -126,7 +223,29 @@ class EnterpriseApp:
                 
                 if st.button("Aplicar Filtros"):
                     self.apply_filters(selected_provincia, has_web, has_ecommerce)
-
+                st.subheader("🤖 Estado del LLM")
+                            
+                llm_status = st.session_state.get("llm_status", "unknown")
+                            
+                if llm_status == "operational":
+                    st.success("✅ LLM Operativo")
+                elif llm_status == "timeout":
+                    st.error("❌ Timeout en LLM")
+                    if st.button("Reintentar conexión"):
+                        self.check_llm_status(optional=True)
+                elif llm_status == "connection_error":
+                    st.error("❌ No se puede conectar con Ollama")
+                    if st.button("Reintentar conexión"):
+                                self.check_llm_status(optional=True)
+                elif llm_status == "error":
+                    st.error("❌ Error en LLM")
+                    if st.button("Reintentar conexión"):
+                                    self.check_llm_status(optional=True)
+                    else:
+                        st.error("❌ Estado desconocido del LLM")
+                        if st.button("Reintentar conexión"):
+                            self.check_llm_status(optional=True)
+                    
     def render_main_content(self):
         """Renderiza el contenido principal"""
         st.title("Sistema de Análisis Empresarial 🏢")
