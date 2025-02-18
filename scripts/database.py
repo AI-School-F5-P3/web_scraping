@@ -1,15 +1,16 @@
-# database.py
 import psycopg2
 import pandas as pd
 from typing import Optional, List, Dict, Any
 from psycopg2.extras import execute_values
 from config import DB_CONFIG, HARDWARE_CONFIG, TIMEOUT_CONFIG
+import platform
 
 class DatabaseManager:
     def __init__(self):
         self.connection = psycopg2.connect(**DB_CONFIG)
         self.connection.autocommit = True
         self._optimize_connection()
+        self.create_table_if_not_exists()
 
     def _optimize_connection(self):
         with self.connection.cursor() as cursor:
@@ -17,7 +18,16 @@ class DatabaseManager:
             cursor.execute(f"SET work_mem = '{ram_gb//4}MB'")
             cursor.execute(f"SET maintenance_work_mem = '{ram_gb//4}MB'")
             cursor.execute(f"SET effective_cache_size = '{ram_gb*3//4}GB'")
-            cursor.execute("SET effective_io_concurrency = 0")
+            
+            system = platform.system()
+            if system == "Darwin":
+                cursor.execute("SET effective_io_concurrency = 0")
+            else:
+                try:
+                    cursor.execute("SET effective_io_concurrency = 200")
+                except Exception as e:
+                    print(f"Warning: {e} (setting effective_io_concurrency on {system})")
+                        
             cursor.execute("SET random_page_cost = 1.1")
             cursor.execute("SET cpu_tuple_cost = 0.03")
             cursor.execute("SET cpu_index_tuple_cost = 0.01")
@@ -26,10 +36,12 @@ class DatabaseManager:
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(query, params or ())
-                if return_df:
+                if return_df and query.strip().lower().startswith("select"):
                     columns = [desc[0] for desc in cursor.description]
                     return pd.DataFrame(cursor.fetchall(), columns=columns)
-                return cursor.fetchall()
+                elif query.strip().lower().startswith("select"):
+                    return cursor.fetchall()
+                return None
         except Exception as e:
             self._handle_db_error(e, query)
             return None
@@ -52,6 +64,9 @@ class DatabaseManager:
         self._optimize_connection()
 
     def batch_insert(self, df: pd.DataFrame, table: str, columns: List[str]) -> Dict[str, Any]:
+        """
+        Inserta un lote de registros en la base de datos, ignorando duplicados
+        """
         chunk_size = 1000
         total_inserted = 0
         errors = []
@@ -63,35 +78,95 @@ class DatabaseManager:
                 for chunk in df_chunks:
                     try:
                         values = [tuple(row) for row in chunk[columns].values]
-                        insert_query = f"INSERT INTO {table} ({', '.join(columns)}) VALUES %s"
+                        insert_query = f"""
+                        INSERT INTO {table} ({', '.join(columns)})
+                        VALUES %s
+                        ON CONFLICT ON CONSTRAINT idx_sociedades_cod_infotel DO NOTHING
+                        """
                         execute_values(cursor, insert_query, values)
-                        total_inserted += len(chunk)
+                        total_inserted += cursor.rowcount
                     except Exception as e:
-                        errors.append(str(e))
-                        self.connection.rollback()
+                        # Intentar con una sintaxis alternativa si la primera falla
+                        try:
+                            insert_query = f"""
+                            INSERT INTO {table} ({', '.join(columns)})
+                            VALUES %s
+                            ON CONFLICT (cod_infotel) DO NOTHING
+                            """
+                            execute_values(cursor, insert_query, values)
+                            total_inserted += cursor.rowcount
+                        except Exception as e2:
+                            errors.append(str(e2))
+                            self.connection.rollback()
 
             return {
-                "status": "success" if total_inserted == len(df) else "partial",
+                "status": "success" if total_inserted > 0 else "no_changes",
                 "inserted": total_inserted,
                 "total": len(df),
                 "errors": errors
             }
         except Exception as e:
-            return {"status": "error", "message": str(e), "errors": errors}
+            return {
+                "status": "error",
+                "message": str(e),
+                "errors": errors
+            }
 
-    def save_batch(self, df: pd.DataFrame, batch_id: str, created_by: str) -> Dict[str, Any]:
+
+    def save_batch(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Guarda un lote de registros evitando duplicados por cod_infotel
+        """
         insert_columns = [
             'cod_infotel', 'nif', 'razon_social', 'domicilio', 'cod_postal',
-            'nom_poblacion', 'nom_provincia', 'url', 'lote_id', 'created_by'
+            'nom_poblacion', 'nom_provincia', 'url'
         ]
         
-        df = df.copy()
-        df['lote_id'] = batch_id
-        df['created_by'] = created_by
+        try:
+            # Primero, obtener los cod_infotel existentes
+            query = "SELECT cod_infotel FROM sociedades"
+            existing_df = self.execute_query(query, return_df=True)
+            
+            if existing_df is not None and not existing_df.empty:
+                # Filtrar los registros que no existen en la base de datos
+                existing_codes = set(existing_df['cod_infotel'].tolist())
+                new_records = df[~df['cod_infotel'].isin(existing_codes)]
+                
+                if new_records.empty:
+                    return {
+                        "status": "success",
+                        "inserted": 0,
+                        "total": len(df),
+                        "message": "No hay nuevos registros para insertar"
+                    }
+                
+                # Realizar la inserción solo con los registros nuevos
+                return self.batch_insert(new_records, 'sociedades', insert_columns)
+            else:
+                # Si no hay registros existentes, insertar todo
+                return self.batch_insert(df, 'sociedades', insert_columns)
+                
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": str(e),
+                "inserted": 0,
+                "total": len(df)
+            }
         
-        return self.batch_insert(df, 'sociedades', insert_columns)
+    def get_urls_for_scraping(self, batch_id: str = None, limit: int = 100) -> pd.DataFrame:
+        query = """
+        SELECT cod_infotel, url
+        FROM sociedades
+        WHERE deleted = FALSE 
+        AND url IS NOT NULL
+        AND url_status IS NULL
+        """
+            
+        query += f" LIMIT {limit}"
+        return self.execute_query(query, return_df=True)
 
-    def update_scraping_results(self, results: List[Dict[str, Any]], batch_id: str) -> Dict[str, Any]:
+    def update_scraping_results(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
         try:
             update_query = """
             UPDATE sociedades 
@@ -107,9 +182,10 @@ class DatabaseManager:
                 twitter = %(twitter)s,
                 linkedin = %(linkedin)s,
                 instagram = %(instagram)s,
+                youtube = %(youtube)s,
                 e_commerce = %(ecommerce)s,
                 fecha_actualizacion = NOW()
-            WHERE url = %(url)s AND lote_id = %(batch_id)s
+            WHERE cod_infotel = %(cod_infotel)s
             """
             
             with self.connection.cursor() as cursor:
@@ -126,9 +202,9 @@ class DatabaseManager:
                         'twitter': result.get('social_media', {}).get('twitter'),
                         'linkedin': result.get('social_media', {}).get('linkedin'),
                         'instagram': result.get('social_media', {}).get('instagram'),
+                        'youtube': result.get('social_media', {}).get('youtube'),
                         'ecommerce': result.get('is_ecommerce', False),
-                        'url': result.get('url'),
-                        'batch_id': batch_id
+                        'cod_infotel': result.get('cod_infotel')
                     }
                     cursor.execute(update_query, params)
                     
@@ -136,21 +212,63 @@ class DatabaseManager:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-    def get_urls_for_scraping(self, batch_id: str = None, limit: int = 100) -> pd.DataFrame:
-        query = """
-        SELECT id, cod_infotel, url
-        FROM sociedades
-        WHERE deleted = FALSE 
-        AND url IS NOT NULL
-        AND url_status IS NULL
+        
+    def create_table_if_not_exists(self):
+        """Crea la tabla con índice único en cod_infotel"""
+        create_table_query = """
+        CREATE TABLE IF NOT EXISTS sociedades (
+            id SERIAL PRIMARY KEY,
+            cod_infotel INTEGER NOT NULL,
+            nif VARCHAR(11),
+            razon_social VARCHAR(255),
+            domicilio VARCHAR(255),
+            cod_postal VARCHAR(5),
+            nom_poblacion VARCHAR(100),
+            nom_provincia VARCHAR(100),
+            url VARCHAR(255),
+            url_valida VARCHAR(255),
+            url_exists BOOLEAN DEFAULT FALSE NOT NULL,
+            url_limpia VARCHAR(255),
+            url_status INTEGER,
+            url_status_mensaje VARCHAR(255),
+            telefono_1 VARCHAR(16),
+            telefono_2 VARCHAR(16),
+            telefono_3 VARCHAR(16),
+            facebook VARCHAR(255),
+            twitter VARCHAR(255),
+            linkedin VARCHAR(255),
+            instagram VARCHAR(255),
+            youtube VARCHAR(255),
+            e_commerce BOOLEAN DEFAULT FALSE NOT NULL,
+            fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            deleted BOOLEAN DEFAULT FALSE
+        );
+        
+        -- Crear índice único si no existe
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sociedades_cod_infotel 
+        ON sociedades(cod_infotel);
         """
-        
-        if batch_id:
-            query += " AND lote_id = %s"
-            params = (batch_id,)
-        else:
-            params = None
+        try:
+            self.execute_query(create_table_query, return_df=False)
+        except Exception as e:
+            print(f"Error creating table: {e}")
             
-        query += f" LIMIT {limit}"
-        
-        return self.execute_query(query, params, return_df=True)
+    def reset_database(self):
+        """Elimina y recrea la tabla sociedades"""
+        try:
+            # Primero eliminamos la tabla si existe
+            drop_query = "DROP TABLE IF EXISTS sociedades CASCADE;"
+            self.execute_query(drop_query)
+            
+            # Luego recreamos la tabla con el índice único
+            self.create_table_if_not_exists()
+            
+            return {
+                "status": "success",
+                "message": "Base de datos reiniciada exitosamente"
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Error al reiniciar la base de datos: {str(e)}"
+            }

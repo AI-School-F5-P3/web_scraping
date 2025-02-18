@@ -44,13 +44,13 @@ PROVINCIAS_ESPANA = [
     'Sevilla', 'Soria', 'Tarragona', 'Teruel', 'Toledo', 'Valencia', 'Valladolid',
     'Vizcaya', 'Zamora', 'Zaragoza'
 ]
- 
+
 # Configuración de Ollama
 OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
 LLM_MODELS = {
-    "orquestador": "deepseek-r1:14b",
-    "base_datos": "qwen2.5:14b",
-    "scraping": "gemma2:27b"
+    # "orquestador": "deepseek-r1:latest",
+    "base_datos": "qwen2.5:7b",
+    "scraping": "llama3.1:8b"
 }
 
 # Columnas requeridas para ingesta
