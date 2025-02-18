@@ -1,7 +1,7 @@
 # agents.py
 
 from langchain.agents import Tool, initialize_agent
-from langchain.chains.conversation.memory import ConversationBufferMemory
+from langchain.memory import ConversationBufferMemory
 from langchain.llms.base import LLM
 import requests
 import pandas as pd
@@ -84,7 +84,8 @@ Usuario: "Verificar webs de Barcelona"
 
     def __init__(self):
         self.llm = CustomLLM(LLM_MODELS["orquestador"])
-        self.memory = ConversationBufferMemory()
+        #self.memory = ConversationBufferMemory()
+        self.memory = ConversationBufferMemory(return_messages=True)
         self.max_workers = HARDWARE_CONFIG["max_workers"]
 
     def process(self, user_input: str) -> Dict[str, Any]:

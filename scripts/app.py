@@ -8,7 +8,7 @@ from agents import OrchestratorAgent, DBAgent, ScrapingAgent
 from database import DatabaseManager
 from scraping import ProWebScraper
 from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA
-
+import matplotlib.pyplot as plt
 class EnterpriseApp:
     def __init__(self):
         self.init_session_state()
@@ -103,27 +103,22 @@ class EnterpriseApp:
                 if file.name.endswith('.csv'):
                     df = pd.read_csv(file, header=0, sep=';', encoding='utf-8')
                 else:
-                    df = pd.read_excel(file, header=0, sep=';', encoding='utf-8')
-                    
-                # Mostrar columnas detectadas para depuración
-                st.write("Columnas detectadas:", df.columns.tolist())
+                    df = pd.read_excel(file, header=0, engine='openpyxl')
                 
                 # Validar columnas
                 missing_cols = [col for col in REQUIRED_COLUMNS if col not in df.columns]
                 if missing_cols:
                     st.error(f"Faltan columnas requeridas: {', '.join(missing_cols)}")
                     return
-                
+
                 # Normalizar nombres de columnas
                 df.columns = [col.strip().lower() for col in df.columns]
-                
+                                
                 # Generar ID de lote
                 batch_id = f"BATCH_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                 
                 # Guardar en base de datos
                 result = self.db.save_batch(df, batch_id, st.session_state.get("user", "streamlit_user"))
-                
-                st.write("Resultado de save_batch:", result)
                 
                 if result["status"] == "success":
                     st.session_state.current_batch = {
@@ -137,7 +132,7 @@ class EnterpriseApp:
                     st.error(f"❌ Error al procesar archivo: {result['message']}")
                 
         except Exception as e:
-            st.error(f"❌ Error al procesar archivo: {result.get('message', 'Error desconocido')}")
+            st.error(f"❌ Error al procesar archivo: {str(e)}")
 
     def render_dashboard(self):
         """Renderiza el dashboard con estadísticas"""
@@ -157,12 +152,12 @@ class EnterpriseApp:
             st.metric("Total Registros", f"{st.session_state.current_batch['total_records']:,}")
         
         total_with_web = len(st.session_state.current_batch['data'][
-            st.session_state.current_batch['data']['URL'].notna()
-        ])
+            st.session_state.current_batch['data']['url'].notna()])
+
         with col2:
             st.metric("Con Web", f"{total_with_web:,}")
         
-        unique_provinces = st.session_state.current_batch['data']['NOM_PROVINCIA'].nunique()
+        unique_provinces = st.session_state.current_batch['data']['nom_provincia'].nunique()
         with col3:
             st.metric("Provincias", unique_provinces)
         
@@ -174,14 +169,34 @@ class EnterpriseApp:
         
         with col1:
             st.subheader("Distribución por Provincia")
-            prov_counts = st.session_state.current_batch['data']['NOM_PROVINCIA'].value_counts()
+            prov_counts = st.session_state.current_batch['data']['nom_provincia'].value_counts()
             st.bar_chart(prov_counts)
             
         with col2:
             st.subheader("Estado de URLs")
-            url_status = st.session_state.current_batch['data']['URL'].notna().value_counts()
-            st.pie_chart(url_status)
+            
+            # Evaluamos si cada URL es realmente válida: debe ser una cadena y no estar vacía
+            valid_url = st.session_state.current_batch['data']['url'].apply(
+                lambda x: isinstance(x, str) and x.strip() != '' and 
+                        (x.strip().lower().startswith("http://") or 
+                        x.strip().lower().startswith("https://") or 
+                        x.strip().lower().startswith("www."))
+            )
+            url_status = valid_url.value_counts()
+            
+            # Generamos las etiquetas de forma dinámica
+            labels = ["Con URL" if val is True else "Sin URL" for val in url_status.index]
+            sizes = url_status.values
+            default_colors = ['#66b3ff', '#ff9999']
+            colors = default_colors[:len(sizes)]
+            
+            # Crear el gráfico de pastel usando matplotlib
+            fig, ax = plt.subplots()
+            ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
+            ax.axis('equal')  # Mantiene el gráfico circular
+            st.pyplot(fig)
 
+            
     def render_queries(self):
         """Renderiza la sección de consultas"""
         st.subheader("🔍 Consultas Avanzadas")
@@ -346,13 +361,13 @@ class EnterpriseApp:
             df = st.session_state.current_batch['data'].copy()
             
             if provincia != "Todas":
-                df = df[df['NOM_PROVINCIA'] == provincia]
+                df = df[df['nom_provincia'] == provincia]
                 
             if has_web:
-                df = df[df['URL'].notna()]
+                df = df[df['url'].notna()]
                 
             if has_ecommerce:
-                df = df[df['E_COMMERCE'] == True]
+                df = df[df['e_commerce'] == True]
                 
             st.session_state.current_batch['filtered_data'] = df
             st.success("Filtros aplicados correctamente")
