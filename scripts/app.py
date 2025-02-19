@@ -19,15 +19,92 @@ class EnterpriseApp:
         self.db = DatabaseManager()
         self.scraper = ProWebScraper()
         self.setup_agents()
-        # Cargar datos de la BD si no hay nada en session_state
         self.load_data_from_db()
         
+        # Enhanced page configuration
         st.set_page_config(
             page_title="Sistema Empresarial de Análisis",
             page_icon="🏢",
             layout="wide",
             initial_sidebar_state="expanded"
         )
+        
+        # Add custom CSS for better styling
+        st.markdown("""
+            <style>
+                /* Main container styling */
+                .main {
+                    padding: 2rem;
+                }
+                
+                /* Sidebar styling */
+                .css-1d391kg {
+                    padding: 2rem 1rem;
+                }
+                
+                /* Card-like containers */
+                .stMetric {
+                    background-color: #ffffff;
+                    border-radius: 0.5rem;
+                    padding: 1rem;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                }
+                
+                /* Tab styling */
+                .stTabs [data-baseweb="tab-list"] {
+                    gap: 2rem;
+                    margin-bottom: 2rem;
+                }
+                
+                .stTabs [data-baseweb="tab"] {
+                    background-color: #f8f9fa;
+                    border-radius: 0.5rem;
+                    padding: 0.5rem 2rem;
+                    font-weight: 500;
+                }
+                
+                .stTabs [data-baseweb="tab"][aria-selected="true"] {
+                    background-color: #1f77b4;
+                    color: white;
+                }
+                
+                /* Button styling */
+                .stButton > button {
+                    width: 100%;
+                    border-radius: 0.5rem;
+                    padding: 0.5rem 1rem;
+                    background-color: #1f77b4;
+                    color: white;
+                }
+                
+                .stButton > button:hover {
+                    background-color: #155987;
+                }
+                
+                /* Card containers for metrics */
+                div.element-container:has(div.stMetric) {
+                    background-color: #ffffff;
+                    border-radius: 0.5rem;
+                    padding: 1rem;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                    margin-bottom: 1rem;
+                }
+                
+                /* Header styling */
+                h1, h2, h3 {
+                    color: #2c3e50;
+                    margin-bottom: 1.5rem;
+                }
+                
+                /* File uploader styling */
+                .stFileUploader {
+                    border: 2px dashed #ccc;
+                    border-radius: 0.5rem;
+                    padding: 1rem;
+                    margin-bottom: 1.5rem;
+                }
+            </style>
+        """, unsafe_allow_html=True)
 
     def init_session_state(self):
         """Inicializa variables de estado"""
@@ -101,27 +178,24 @@ class EnterpriseApp:
                 st.rerun()  # Fuerza la recarga de la app
 
     def render_main_content(self):
-        """Renderiza el contenido principal"""
+        """Renderiza el contenido principal con UI mejorada"""
         st.title("Sistema de Análisis Empresarial 🏢")
         
-        # Tabs principales
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "📊 Dashboard",
-            "🔍 Consultas",
-            "🌐 Web Scraping",
-            "📈 Análisis"
+        # Enhanced tabs with custom styling and icons
+        tabs = st.tabs([
+            "📊  DASHBOARD  ",
+            "🔍  CONSULTAS  ",
+            "🌐  WEB SCRAPING  ",
+            "📈  ANÁLISIS  "
         ])
         
-        with tab1:
+        with tabs[0]:
             self.render_dashboard()
-            
-        with tab2:
+        with tabs[1]:
             self.render_queries()
-            
-        with tab3:
+        with tabs[2]:
             self.render_scraping()
-            
-        with tab4:
+        with tabs[3]:
             self.render_analysis()
 
     def handle_file_upload(self, file):
@@ -164,60 +238,63 @@ class EnterpriseApp:
             st.error(f"❌ Error al procesar archivo: {str(e)}")
 
     def render_dashboard(self):
-        """Renderiza el dashboard con estadísticas"""
+        """Renderiza el dashboard con diseño mejorado"""
         if not st.session_state.current_batch:
             st.info("👆 Carga un archivo para ver las estadísticas")
             return
 
         df = st.session_state.current_batch["data"]
-        df.columns = df.columns.str.strip().str.lower()
         
-        # Estadísticas generales
-        col1, col2, col3, col4 = st.columns(4)
+        # Enhanced metrics display
+        st.markdown("### 📊 Estadísticas Generales")
+        metrics_container = st.container()
+        col1, col2, col3, col4 = metrics_container.columns(4)
         
         with col1:
-            st.metric("Total Registros", f"{st.session_state.current_batch['total_records']:,}")
+            st.metric(
+                "Total Registros",
+                f"{st.session_state.current_batch['total_records']:,}",
+                delta=None,
+            )
         
-        total_with_web = len(st.session_state.current_batch['data'][
-            st.session_state.current_batch['data']['url'].notna()
-        ])
+        total_with_web = len(df[df['url'].notna()])
         with col2:
-            st.metric("Con Web", f"{total_with_web:,}")
+            st.metric(
+                "Con Web",
+                f"{total_with_web:,}",
+                delta=f"{(total_with_web/len(df)*100):.1f}%"
+            )
         
-        unique_provinces = st.session_state.current_batch['data']['nom_provincia'].nunique()
+        unique_provinces = df['nom_provincia'].nunique()
         with col3:
-            st.metric("Provincias", unique_provinces)
+            st.metric(
+                "Provincias",
+                unique_provinces,
+                delta=None
+            )
         
         with col4:
-            st.metric("Última actualización", st.session_state.current_batch['timestamp'].strftime("%Y-%m-%d %H:%M:%S"))
-        
-        # Gráficos
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Distribución por Provincia")
-            prov_counts = df['nom_provincia'].value_counts()
-            st.bar_chart(prov_counts)
-            
-        with col2:
-            st.subheader("Estado de URLs")
-            valid_url = df['url'].apply(
-                lambda x: isinstance(x, str) and x.strip() != '' and 
-                          (x.strip().lower().startswith("http://") or 
-                           x.strip().lower().startswith("https://") or 
-                           x.strip().lower().startswith("www."))
+            st.metric(
+                "Última actualización",
+                st.session_state.current_batch['timestamp'].strftime("%Y-%m-%d %H:%M")
             )
-            url_status = valid_url.value_counts()
-            labels = ["Con URL" if val is True else "Sin URL" for val in url_status.index]
-            sizes = url_status.values
-            default_colors = ['#66b3ff', '#ff9999']
-            colors = default_colors[:len(sizes)]
-            
-            import matplotlib.pyplot as plt
-            fig, ax = plt.subplots()
-            ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
-            ax.axis('equal')
+        
+        # Enhanced charts section
+        st.markdown("### 📈 Visualización de Datos")
+        chart_col1, chart_col2 = st.columns(2)
+        
+        with chart_col1:
+            st.markdown("#### Distribución por Provincia")
+            prov_counts = df['nom_provincia'].value_counts().head(10)
+            fig, ax = plt.subplots(figsize=(10, 6))
+            bars = ax.bar(prov_counts.index, prov_counts.values)
+            plt.xticks(rotation=45, ha='right')
+            plt.title("Top 10 Provincias")
             st.pyplot(fig)
+            
+        with chart_col2:
+            st.markdown("#### Estado de URLs")
+            self.render_url_status_chart(df)
 
     def render_queries(self):
         """Renderiza la sección de consultas (SQL)"""
@@ -509,6 +586,33 @@ class EnterpriseApp:
             st.write(f"Empresas con NIF: {count_nif}")
         else:
             st.info("No hay datos de contacto disponibles.")
+            
+    def render_url_status_chart(self, df):
+        """Renderiza el gráfico de estado de URLs con mejor diseño"""
+        valid_url = df['url'].apply(
+            lambda x: isinstance(x, str) and x.strip() != '' and 
+                      (x.strip().lower().startswith("http://") or 
+                       x.strip().lower().startswith("https://") or 
+                       x.strip().lower().startswith("www."))
+        )
+        url_status = valid_url.value_counts()
+        
+        fig, ax = plt.subplots(figsize=(8, 8))
+        colors = ['#3498db', '#e74c3c']
+        wedges, texts, autotexts = ax.pie(
+            url_status.values,
+            labels=[f"Con URL\n({url_status[True]:,})" if True in url_status else "",
+                   f"Sin URL\n({url_status[False]:,})" if False in url_status else ""],
+            colors=colors,
+            autopct='%1.1f%%',
+            startangle=90
+        )
+        
+        # Enhance the appearance of the pie chart
+        plt.setp(autotexts, size=9, weight="bold")
+        plt.setp(texts, size=10)
+        ax.axis('equal')
+        st.pyplot(fig)
 
     def run(self):
         """Ejecuta la aplicación"""
