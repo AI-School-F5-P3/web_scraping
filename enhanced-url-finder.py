@@ -19,6 +19,7 @@ from functools import wraps
 import time
 import sys
 import signal
+import socket
 
 # Desactivar advertencias de SSL
 urllib3.disable_warnings(InsecureRequestWarning)
@@ -151,6 +152,7 @@ def get_page_content(url, session):
     except Exception as e:
         print(f"Error accediendo a {url}: {str(e)}")
         return None
+    
 def detect_ecommerce(soup):
     """Detecta si una web tiene comercio electrónico."""
     # Lista de indicadores de ecommerce
@@ -160,7 +162,7 @@ def detect_ecommerce(soup):
         ],
         'botones_compra': [
             'añadir al carrito', 'add to cart', 'comprar ahora', 'buy now',
-            'realizar pedido', 'checkout', 'agregar al carrito', 'comprar'
+            'realizar pedido', 'checkout', 'agregar al carrito', 'comprar', 'tienda online'
         ],
         'precios': [
             '€', 'eur', 'euros', 'precio', 'price', 'pvp'
@@ -326,16 +328,27 @@ def verify_company_url(url, company_name, session):
         
         data['social_links'] = social_links
         
-        # Calcular puntuación
+        # MODIFICACIÓN: Verificación más flexible para marcas reconocidas
         search_terms = clean_company_name(company_name).split('-')
         search_terms = [term for term in search_terms if len(term) > 2]
         
         score = 0
         text_to_search = f"{data['title']} {data['meta_description']} {data['h1']}"
         
-        matches = sum(1 for term in search_terms if term in text_to_search)
-        score += (matches / len(search_terms)) * 50
+        # Comprobar si el primer término del nombre (normalmente la marca principal)
+        # aparece prominentemente en la página
+        main_brand = search_terms[0] if search_terms else ""
+        if main_brand and main_brand in text_to_search:
+            # Si la marca principal está en el título o meta description, dar puntuación alta
+            if main_brand in data['title'] or main_brand in data['meta_description']:
+                score += 65  # Suficiente para pasar el umbral de 60
+                print(f"Marca principal '{main_brand}' encontrada prominentemente en la página")
+        else:
+            # Cálculo de puntuación original
+            matches = sum(1 for term in search_terms if term in text_to_search)
+            score += (matches / len(search_terms)) * 50
         
+        # Resto de puntuación como antes
         if data['contact_page']:
             score += 15
         if data['phones']:
@@ -343,57 +356,115 @@ def verify_company_url(url, company_name, session):
         score += len([x for x in social_links.values() if x]) * 5
         
         data['score'] = score
+        print(f"Puntuación de verificación para {url}: {score}")
         return score >= 60, data
         
     except Exception as e:
+        import traceback
         print(f"Error en verify_company_url: {str(e)}")
+        print(traceback.format_exc())
         return False, None
 
-def generate_possible_urls(company_name):
-    print(f"\nGenerando URLs para: {company_name}")  # Nuevo
-    clean_name = clean_company_name(company_name)
-    print(f"Nombre limpio: {clean_name}")  # Nuevo
-    base_name = clean_name.replace('-', '')
+def generate_possible_urls(company_name, excel_url=None, provincia=None):
+    print(f"\nGenerando URLs para: {company_name}")
+    print(f"Provincia: {provincia}")
     
-    variations = [
-        clean_name,
-        base_name,
-        f"grupo{base_name}",
-        f"group{base_name}",
-        f"{base_name}group",
-        f"{base_name}grupo",
-        f"{base_name}online",
-        f"{base_name}web",
-    ]
-    print(f"Intentando variaciones: {variations}")  # Nuevo
+    valid_domains = set()  # Usaremos este set para almacenar las URLs válidas
     
-    domains = ['.es', '.com', '.net', '.org', '.eu', '.com.es', '.cat', '.eus', '.gal']
-    valid_domains = set()
+    # Step 1: Check Excel URL first if available
+    if excel_url and isinstance(excel_url, str) and excel_url.strip():
+        url = excel_url.strip()
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+        return [url], True  # Return flag to indicate this is an Excel URL
     
-    for variation in variations:
-        for domain in domains:
-            domain_to_check = f"{variation}{domain}"
-            print(f"Probando dominio: {domain_to_check}")  # Nuevo
+    # Inner function for domain verification
+    def verify_domain(url):
+        domain = url.replace('https://', '').replace('http://', '')
+        if domain.startswith('www.'):
+            base_domain = domain[4:]
+        else:
+            base_domain = domain
+            
+        # Método 1: DNS resolver
+        try:
+            dns.resolver.resolve(base_domain, 'A')
+            return True
+        except:
             try:
-                dns.resolver.resolve(domain_to_check, 'A')
-                valid_domains.add(f"https://www.{domain_to_check}")
-                valid_domains.add(f"https://{domain_to_check}")
-                print(f"✓ Dominio válido encontrado: {domain_to_check}")  # Nuevo
-            except Exception as e:  # Nuevo
-                print(f"✗ Dominio no válido: {domain_to_check}")  # Nuevo
-                continue
+                dns.resolver.resolve('www.' + base_domain, 'A')
+                return True
+            except:
+                # Método 2: Socket como fallback
+                try:
+                    socket.gethostbyname(domain)
+                    return True
+                except socket.gaierror:
+                    try:
+                        socket.gethostbyname('www.' + base_domain)
+                        return True
+                    except:
+                        return False
     
-    return list(valid_domains)
+    # Step 2: Generate word combinations from clean name
+    clean_name = clean_company_name(company_name)
+    words = clean_name.split('-')
+    print(f"Palabras limpias: {words}")
+    
+    # Determine domains based on provincia
+    base_domains = ['.es', '.com', '.net', '.org']
+    regional_domains = []
+    
+    if provincia:
+        provincia = provincia.upper() if isinstance(provincia, str) else ""
+        
+        if provincia in ["BARCELONA", "TARRAGONA", "LERIDA", "LLEIDA", "GERONA", "GIRONA"]:
+            regional_domains.append('.cat')
+        
+        if provincia in ["LA CORUÑA", "LUGO", "ORENSE", "PONTEVEDRA", "A CORUÑA", "OURENSE"]:
+            regional_domains.append('.gal')
+        
+        if provincia in ["ALAVA", "VIZCAYA", "GUIPUZCOA", "ARABA", "BIZKAIA", "GIPUZKOA"]:
+            regional_domains.append('.eus')
+    
+    domains = base_domains + regional_domains
+    print(f"Dominios a comprobar: {domains}")
+    
+    # Generate progressive word combinations
+    word_combinations = []
+    for i in range(len(words)):
+        combination = ''.join(words[:i+1])
+        word_combinations.append(combination)
+        print(f"Generando combinación: {combination}")
+    
+    # Generate and verify URLs for each word combination
+    for combination in word_combinations:
+        for domain in domains:
+            for url in [
+                f"https://www.{combination}{domain}",
+                f"https://{combination}{domain}"
+            ]:
+                if verify_domain(url):
+                    valid_domains.add(url)
+                    print(f"✓ Dominio válido encontrado: {url}")
+                else:
+                    print(f"✗ Dominio no válido: {url}")
+    
+    return list(valid_domains), False
 
 def verify_urls_parallel(urls, company_name):
     def verify_single_url(url):
+        # Añadir esta validación al inicio de la función
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+            
         session = create_session()
         try:
             print(f"\nIniciando verificación de {url}")
             future = concurrent.futures.ThreadPoolExecutor().submit(
                 verify_company_url, url, company_name, session
             )
-            is_valid, data = future.result(timeout=8)  # Timeout individual por URL
+            is_valid, data = future.result(timeout=8)
             return url, is_valid, data
         except (concurrent.futures.TimeoutError, Exception) as e:
             print(f"Timeout o error en {url}")
@@ -436,7 +507,7 @@ def get_whois_info(domain):
     except:
         return None
 
-def process_excel(file_path, url_column='URL'):
+def process_excel(file_path, url_column='URL', provincia_column='NOM_PROVINCIA'):
     """Procesa un archivo Excel con nombres de empresas y URLs."""
     _, ext = os.path.splitext(file_path)
     cache = URLCache()
@@ -450,7 +521,7 @@ def process_excel(file_path, url_column='URL'):
         print(f"Error al leer el archivo: {str(e)}")
         return None
     
-    # Inicializar columnas
+    # Initialize columns
     df['URL_Válida'] = False
     df['URLs_Encontradas'] = ''
     df['Teléfono_1'] = ''
@@ -471,32 +542,66 @@ def process_excel(file_path, url_column='URL'):
         try:
             print(f"\nProcesando empresa {idx + 1}: {row['RAZON_SOCIAL']}")
             company_name = row['RAZON_SOCIAL']
+            excel_url = row[url_column] if pd.notna(row[url_column]) else None
+            provincia = row[provincia_column] if provincia_column in row and pd.notna(row[provincia_column]) else None
             
-            # Verificar caché
+            # Check cache first
             cached_urls, cached_data = cache.get(company_name)
             if cached_urls:
                 valid_urls = cached_urls
                 verification_data = cached_data
             else:
-                # Generar y verificar URLs
-                possible_urls = generate_possible_urls(company_name)
-                if row[url_column] and pd.notna(row[url_column]):
-                    possible_urls.append(row[url_column])
+                verification_data = {}
                 
-                print(f"URLs a verificar: {possible_urls}")
-                verification_data = verify_urls_parallel(possible_urls, company_name)
-                valid_urls = list(verification_data.keys())
+                # Generate URLs in batches, starting with Excel URL
+                possible_urls, is_excel_url = generate_possible_urls(company_name, excel_url, provincia)
                 
-                # Actualizar caché
+                if is_excel_url:
+                    # Verify Excel URL first
+                    session = create_session()
+                    print(f"Verificando URL del Excel: {possible_urls[0]}")
+                    is_valid, data = verify_company_url(possible_urls[0], company_name, session)
+                    session.close()
+                    
+                    if is_valid:
+                        print(f"✓ URL del Excel válida: {possible_urls[0]}")
+                        verification_data[possible_urls[0]] = data
+                        valid_urls = [possible_urls[0]]
+                    else:
+                        # If Excel URL is invalid, generate and check progressive combinations
+                        possible_urls, _ = generate_possible_urls(company_name, None, provincia)
+                else:
+                    # Process URLs in sequential batches
+                    found_valid_url = False
+                    for i in range(0, len(possible_urls), 4):  # Process in batches of 4
+                        batch_urls = possible_urls[i:i+4]
+                        print(f"Verificando batch de URLs: {batch_urls}")
+                        
+                        batch_results = verify_urls_parallel(batch_urls, company_name)
+                        if batch_results:
+                            # Check if any URL in batch has high score
+                            for url, data in batch_results.items():
+                                if data.get('score', 0) >= 60:
+                                    verification_data[url] = data
+                                    found_valid_url = True
+                                    break
+                        
+                        if found_valid_url:
+                            print("✓ URL válida encontrada con puntuación óptima. Deteniendo búsqueda.")
+                            break
+                    
+                    valid_urls = list(verification_data.keys())
+                
+                # Update cache if we found any valid URLs
                 if verification_data:
                     cache.set(company_name, valid_urls, verification_data)
-        
+            
+            # Update DataFrame with results
             if verification_data:
-                # Actualizar DataFrame
                 df.at[idx, 'URL_Válida'] = True
                 df.at[idx, 'URLs_Encontradas'] = ', '.join(valid_urls)
                 
-                # Recopilar todos los teléfonos y redes sociales de todas las URLs válidas
+                # Collect all phones and social links
                 all_phones = []
                 social_links = {
                     'facebook': '',
@@ -506,7 +611,7 @@ def process_excel(file_path, url_column='URL'):
                     'youtube': ''
                 }
                 
-                # Variables para ecommerce
+                # Ecommerce variables
                 has_ecommerce = False
                 max_ecommerce_score = 0
                 all_evidence = []
@@ -525,24 +630,22 @@ def process_excel(file_path, url_column='URL'):
                             max_ecommerce_score = data['ecommerce_data']['score']
                         all_evidence.extend(data['ecommerce_data']['evidence'])
                 
-                # Asignar teléfonos (limitados a 3)
+                # Update DataFrame with collected data
                 unique_phones = list(dict.fromkeys(all_phones))[:3]
                 for i, phone in enumerate(unique_phones, 1):
                     df.at[idx, f'Teléfono_{i}'] = phone
                 
-                # Asignar redes sociales
                 df.at[idx, 'Facebook'] = social_links['facebook']
                 df.at[idx, 'Twitter'] = social_links['twitter']
                 df.at[idx, 'Instagram'] = social_links['instagram']
                 df.at[idx, 'LinkedIn'] = social_links['linkedin']
                 df.at[idx, 'YouTube'] = social_links['youtube']
                 
-                # Asignar información de ecommerce
                 df.at[idx, 'Tiene_Ecommerce'] = has_ecommerce
                 df.at[idx, 'Ecommerce_Score'] = max_ecommerce_score
                 df.at[idx, 'Ecommerce_Evidencia'] = '; '.join(all_evidence)
                 
-                # Intentar obtener información WHOIS
+                # Try to get WHOIS information
                 try:
                     whois_info = get_whois_info(valid_urls[0].split('/')[2])
                     if whois_info:
@@ -559,7 +662,7 @@ def process_excel(file_path, url_column='URL'):
             print(f"Error procesando empresa {idx + 1}: {str(e)}")
             continue
     
-    output_file = os.path.splitext(file_path)[0] + '_procesado_con500b.xlsx'
+    output_file = os.path.splitext(file_path)[0] + '_procesado_19feb.xlsx'
     try:
         df.to_excel(output_file, index=False, engine='openpyxl')
         return output_file
