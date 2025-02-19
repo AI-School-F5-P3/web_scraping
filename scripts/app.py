@@ -7,11 +7,13 @@ import time
 from agents import OrchestratorAgent, DBAgent, ScrapingAgent
 from database import DatabaseManager
 from scraping import ProWebScraper
-from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA
 from fastapi import FastAPI
 from pydantic import BaseModel
 from agents import OrchestratorAgent, DBAgent, ScrapingAgent 
 import matplotlib
+import requests
+import logging
+from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA, OLLAMA_ENDPOINT
 
 app = FastAPI()
 orchestrator = OrchestratorAgent()
@@ -48,16 +50,7 @@ def scrape_website(request: UserRequest):
     """
     result = scraping_agent.plan_scraping(request.query)
     return result
-import streamlit as st
-import pandas as pd
-from datetime import datetime
-import time
-import requests
-import logging
-from agents import OrchestratorAgent, DBAgent, ScrapingAgent
-from database import DatabaseManager
-from scraping import ProWebScraper
-from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA, OLLAMA_ENDPOINT
+
 
 # Configuración del logging
 logging.basicConfig(
