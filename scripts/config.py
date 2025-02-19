@@ -14,13 +14,13 @@ DB_CONFIG = {
     "database": os.getenv("DB_NAME", "web_scraping")
 }
 
-# Hardware Config
+# Configuración de Hardware (personalizable por cada desarrollador)
 HARDWARE_CONFIG = {
-    "gpu_memory": "24GB",
-    "total_ram": "128GB",
-    "max_workers": 16,
-    "gpu_enabled": True,
-    "cuda_visible_devices": "0",  # Para NVIDIA GPU
+    "gpu_memory": os.getenv("GPU_MEMORY", "24GB"),
+    "total_ram": os.getenv("TOTAL_RAM", "128GB"),
+    "max_workers": int(os.getenv("MAX_WORKERS", "8")),
+    "gpu_enabled": os.getenv("GPU_ENABLED", "True").lower() in ["true", "1"],
+    "cuda_visible_devices": os.getenv("CUDA_VISIBLE_DEVICES", "0"),
     "chrome_options": [
         "--headless",
         "--no-sandbox",
@@ -45,11 +45,23 @@ PROVINCIAS_ESPANA = [
     'Vizcaya', 'Zamora', 'Zaragoza'
 ]
 
+# Configuración de Ollama (if you still use it for some tasks)
+OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
+
+# Configuración de Groq
+# Add the Groq API key here and update the model for database queries.
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    raise ValueError("GROQ_API_KEY not found in environment variables")
+# Dado que la librería de Groq gestiona internamente el endpoint, no es necesario especificarlo.
+
 # Configuración de Ollama
 OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
 LLM_MODELS = {
     # "orquestador": "deepseek-r1:latest",
-    "base_datos": "qwen2.5:7b",
+    # For querying the database, use the desired Groq model:
+    "base_datos": "deepseek-r1-distill-llama-70b",
+    # For scraping tasks, we can keep the existing model or update as needed:
     "scraping": "llama3.1:8b"
 }
 

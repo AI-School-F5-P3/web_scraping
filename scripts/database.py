@@ -11,6 +11,7 @@ class DatabaseManager:
         self.connection.autocommit = True
         self._optimize_connection()
         self.create_table_if_not_exists()
+        pass
 
     def _optimize_connection(self):
         with self.connection.cursor() as cursor:
@@ -33,26 +34,61 @@ class DatabaseManager:
             cursor.execute("SET cpu_index_tuple_cost = 0.01")
 
     def execute_query(self, query: str, params: tuple = None, return_df: bool = False) -> Optional[pd.DataFrame]:
+        """
+        Executes a SQL query and optionally returns results as a DataFrame.
+        
+        Args:
+            query (str): SQL query to execute
+            params (tuple, optional): Query parameters. Defaults to None.
+            return_df (bool, optional): Whether to return results as DataFrame. Defaults to False.
+            
+        Returns:
+            Optional[pd.DataFrame]: Results as DataFrame if return_df is True, None otherwise
+        """
         try:
             with self.connection.cursor() as cursor:
-                cursor.execute(query, params or ())
-                if return_df and query.strip().lower().startswith("select"):
+                # Ensure connection is alive
+                if not self.connection.closed:
+                    cursor.execute("SELECT 1")
+                else:
+                    self._reconnect()
+                    
+                if params:
+                    cursor.execute(query, params)
+                else:
+                    cursor.execute(query)
+                    
+                if cursor.description:  # If the query returns results
                     columns = [desc[0] for desc in cursor.description]
-                    return pd.DataFrame(cursor.fetchall(), columns=columns)
-                elif query.strip().lower().startswith("select"):
-                    return cursor.fetchall()
+                    results = cursor.fetchall()
+                    
+                    if return_df:
+                        df = pd.DataFrame(results, columns=columns)
+                        # Remove duplicates if present
+                        if 'cod_infotel' in df.columns:
+                            df = df.drop_duplicates(subset=['cod_infotel'])
+                        return df
+                    elif "count" in query.lower():
+                        return results[0][0] if results else 0
+                    else:
+                        return results
                 return None
         except Exception as e:
-            self._handle_db_error(e, query)
+            print(f"Database error: {str(e)}")
+            self._reconnect()
             return None
 
-    def _handle_db_error(self, error: Exception, query: str):
-        error_msg = str(error)
-        if "deadlock detected" in error_msg.lower():
-            self.connection.rollback()
-        elif "connection" in error_msg.lower():
-            self._reconnect()
-        raise error
+    def _handle_db_error(self, error: Exception, query: str) -> None:
+        """
+        Handles database errors in a more informative way.
+        
+        Args:
+            error (Exception): The caught exception
+            query (str): The query that caused the error
+        """
+        error_msg = f"Database error: {str(error)}\nQuery: {query}"
+        print(error_msg)  # For logging
+        raise type(error)(error_msg)  # Re-raise with more context
 
     def _reconnect(self):
         try:
@@ -91,25 +127,33 @@ class DatabaseManager:
         except Exception as e:
             return {"status": "error", "message": str(e), "errors": errors}
 
-    def save_batch(self, df: pd.DataFrame) -> Dict[str, Any]:
+    def save_batch(self, df: pd.DataFrame, check_duplicates: bool = False) -> Dict[str, Any]:
         insert_columns = [
             'cod_infotel', 'nif', 'razon_social', 'domicilio', 'cod_postal',
             'nom_poblacion', 'nom_provincia', 'url'
         ]
         
+        if check_duplicates:
+            df = df.drop_duplicates(subset=['cod_infotel'])  # Remove duplicates based on cod_infotel
+        
         return self.batch_insert(df, 'sociedades', insert_columns)
 
-    def get_urls_for_scraping(self, batch_id: str = None, limit: int = 100) -> pd.DataFrame:
+    def get_urls_for_scraping(self, limit: int = 10) -> pd.DataFrame:
+        """Gets URLs that need to be scraped."""
         query = """
-        SELECT cod_infotel, url
-        FROM sociedades
-        WHERE deleted = FALSE 
-        AND url IS NOT NULL
-        AND url_status IS NULL
+        SELECT cod_infotel, url 
+        FROM sociedades 
+        WHERE url IS NOT NULL 
+        AND url != '' 
+        LIMIT %s
         """
-            
-        query += f" LIMIT {limit}"
-        return self.execute_query(query, return_df=True)
+        return self.execute_query(query, params=(limit,), return_df=True)
+
+    def get_record_count(self) -> int:
+        """Gets total number of records in the sociedades table."""
+        query = "SELECT COUNT(*) FROM sociedades"
+        result = self.execute_query(query, return_df=True)
+        return result.iloc[0, 0] if result is not None else 0
 
     def update_scraping_results(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
         try:

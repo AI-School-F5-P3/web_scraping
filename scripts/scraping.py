@@ -20,6 +20,7 @@ from twocaptcha import TwoCaptcha
 from anticaptchaofficial.recaptchav2proxyless import recaptchaV2Proxyless
 from anticaptchaofficial.hcaptchaproxyless import hCaptchaProxyless
 from config import HARDWARE_CONFIG, TIMEOUT_CONFIG
+import pandas as pd
 
 class CaptchaSolver:
     def __init__(self):
@@ -161,15 +162,20 @@ class ProWebScraper:
 
     def _get_page_content(self, url: str) -> str:
         """
-        Intenta obtener el contenido de la página usando varios métodos.
+        Attempts to get the page content using multiple methods with improved timeouts.
         """
+        if not url or pd.isna(url):
+            return None
+            
         for method in [self._try_cloudscraper, self._try_selenium_combined]:
             try:
                 content = method(url)
                 if content and len(content) > 100:
                     return content
+                # Add a small delay between attempts
+                time.sleep(0.5)
             except Exception as e:
-                print(f"Método {method.__name__} falló: {str(e)}")
+                print(f"Method {method.__name__} failed: {str(e)}")
                 continue
         return None
 
@@ -181,26 +187,31 @@ class ProWebScraper:
 
     def _try_selenium_combined(self, url: str) -> str:
         """
-        Intenta obtener la página primero con undetected_chromedriver; 
-        si falla, usa el webdriver estándar de Selenium.
+        Try to get the page first with undetected_chromedriver; 
+        if it fails, use the standard Selenium webdriver.
         """
         drivers = [lambda: uc.Chrome(options=self.chrome_options),
-                   lambda: webdriver.Chrome(options=self.chrome_options)]
+                    lambda: webdriver.Chrome(options=self.chrome_options)]
         for create_driver in drivers:
             driver = None
             try:
                 driver = create_driver()
+                driver.set_page_load_timeout(30)  # Set a higher timeout
                 driver.get(url)
                 self._handle_cookies(driver)
                 if not self._handle_captcha(driver):
-                    raise Exception("Fallo en manejo de CAPTCHA")
+                    raise Exception("Fallo el manejo del Captcha")
+                # Wait for page to fully load
+                WebDriverWait(driver, 10).until(
+                    lambda d: d.execute_script("return document.readyState") == "complete"
+                )
                 return driver.page_source
             except Exception as e:
-                print(f"Intento con {create_driver.__name__ if hasattr(create_driver, '__name__') else 'driver'} falló: {str(e)}")
+                print(f"Attempt with {create_driver.__name__ if hasattr(create_driver, '__name__') else 'driver'} failed: {str(e)}")
             finally:
                 if driver:
                     driver.quit()
-        raise Exception("Todos los métodos Selenium fallaron.")
+        raise Exception("Todos los métodos Selenium han fallado.")
 
     def _handle_cookies(self, driver):
         cookie_xpaths = [

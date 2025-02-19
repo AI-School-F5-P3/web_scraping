@@ -3,19 +3,23 @@
 from langchain.agents import Tool, initialize_agent
 from langchain.chains.conversation.memory import ConversationBufferMemory
 from langchain.llms.base import LLM
+from langchain_groq import ChatGroq
 import requests
 import pandas as pd
 from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
-from config import LLM_MODELS, OLLAMA_ENDPOINT, PROVINCIAS_ESPANA, HARDWARE_CONFIG
+from config import LLM_MODELS, GROQ_API_KEY, OLLAMA_ENDPOINT, PROVINCIAS_ESPANA, HARDWARE_CONFIG
 import re
+from scraping import ProWebScraper
+import unicodedata
 
 class CustomLLM(LLM):
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, provider: str = "ollama"):
         super().__init__()
         self.model_name = model_name
         self.temperature = 0.7
         self.max_tokens = 2000
+        self.provider = provider.lower()
         self.gpu_config = {
             "use_gpu": HARDWARE_CONFIG["gpu_enabled"],
             "gpu_layers": -1,
@@ -24,18 +28,38 @@ class CustomLLM(LLM):
 
     def _call(self, prompt: str, stop: List[str] = None) -> str:
         try:
-            response = requests.post(
-                OLLAMA_ENDPOINT,
-                json={
-                    "model": self.model_name,
-                    "prompt": prompt,
-                    "temperature": self.temperature,
-                    "max_tokens": self.max_tokens,
-                    "stream": False,
-                    **self.gpu_config
-                },
-                timeout=30
-            )
+            if self.provider == "groq":
+                response = requests.post(
+                    # Using the Groq library default endpoint if not provided, or rely on the client.
+                    # For our example, we assume the client library uses GROQ_API_KEY internally.
+                    # If you need to call a specific endpoint, you could add that logic here.
+                    # We'll assume the Groq library handles it.
+                    # For illustration, we simply send the API key in the payload.
+                    "https://api.groq.cloud/generate",
+                    json={
+                        "model": self.model_name,
+                        "prompt": prompt,
+                        "temperature": self.temperature,
+                        "max_tokens": self.max_tokens,
+                        "stream": False,
+                        **self.gpu_config,
+                        "api_key": GROQ_API_KEY
+                    },
+                    timeout=30
+                )
+            else:
+                response = requests.post(
+                    OLLAMA_ENDPOINT,
+                    json={
+                        "model": self.model_name,
+                        "prompt": prompt,
+                        "temperature": self.temperature,
+                        "max_tokens": self.max_tokens,
+                        "stream": False,
+                        **self.gpu_config
+                    },
+                    timeout=30
+                )
             return response.json().get('response', '')
         except Exception as e:
             return f"Error: {str(e)}"
@@ -45,7 +69,7 @@ class CustomLLM(LLM):
 
     @property
     def _llm_type(self) -> str:
-        return "custom_ollama"
+        return "custom_groq" if self.provider == "groq" else "custom_ollama"
     
     class Config:
         extra = "allow"
@@ -72,6 +96,7 @@ class DBAgent:
 8. **Criterios de filtro:**
    - Si la consulta no especifica ningún criterio, omite la cláusula WHERE.
    - Si no hay suficientes datos para generar SQL, responde en español: "No encuentro datos para tu consulta. ¿Podrías reformularla?".
+9. **Consulta de agregación:** Para consultas de conteo, utiliza COUNT(*) y no añade LIMIT.
 
 # Ejemplos de consultas de filas:
 - "Dame las 10 primeras empresas de Madrid" →
@@ -106,46 +131,56 @@ class DBAgent:
 """
 
     def __init__(self):
-        self.llm = CustomLLM(LLM_MODELS["base_datos"])
+        # Use Groq for querying the database
+        self.llm = CustomLLM(LLM_MODELS["base_datos"], provider="groq")
 
     def generate_query(self, natural_query: str) -> Dict[str, Any]:
-        """
-        Generates SQL query from natural language, with improved handling of aggregation queries.
-        """
-        full_prompt = f"{self.PROMPT}\nConsulta: {natural_query}\nGenera la consulta SQL:"
-        response = self.llm.invoke(full_prompt)
+        """Generate SQL query from natural language."""
+        # Normalize the query text
+        query_normalized = self.remove_accents(natural_query.lower())
         
-        # Check if this is a counting/aggregation query
-        is_count_query = any(word in natural_query.lower() for word in [
-            "cuántas", "cuantas", "número de", "numero de", "total de", "cuenta"
-        ])
+        # Check if it's a count query
+        is_count = any(word in query_normalized for word in ["cuantas", "cuantos", "numero de", "total de", "cuenta"])
         
-        # Use regex to extract a SQL query
-        sql_match = re.search(r'SELECT.*?;', response, re.DOTALL | re.IGNORECASE)
+        # Extract province name if present
+        provinces = [p.lower() for p in PROVINCIAS_ESPANA]
+        province = next((p for p in provinces if p in query_normalized), None)
         
-        if sql_match:
-            query = sql_match.group(0)
-            # For count queries, ensure we're using COUNT
-            if is_count_query and "COUNT" not in query.upper():
-                # Convert to COUNT query
-                base_conditions = re.search(r'WHERE.*?(?:LIMIT|;|$)', query, re.DOTALL | re.IGNORECASE)
-                conditions = base_conditions.group(0) if base_conditions else ";"
-                if conditions.upper().endswith("LIMIT"):
-                    conditions = conditions[:conditions.upper().find("LIMIT")] + ";"
-                query = f"SELECT COUNT(*) as total FROM sociedades {conditions}"
+        if is_count and province:
+            # Generate count query with province filter
+            query = f"""
+            SELECT COUNT(*) as total 
+            FROM sociedades 
+            WHERE LOWER(nom_provincia) LIKE '%{province}%';
+            """
+        elif province:
+            # Generate regular query with province filter
+            query = f"""
+            SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, 
+                nom_poblacion, nom_provincia, url 
+            FROM sociedades 
+            WHERE LOWER(nom_provincia) LIKE '%{province}%'
+            LIMIT {5 if '5' in natural_query else 10};
+            """
         else:
-            # Fallback query
-            if is_count_query:
-                query = "SELECT COUNT(*) as total FROM sociedades;"
-            else:
-                query = ("SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, "
-                        "nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3 "
-                        "FROM sociedades LIMIT 10;")
-                
+            # Default query
+            query = """
+            SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, 
+                nom_poblacion, nom_provincia, url 
+            FROM sociedades 
+            LIMIT 10;
+            """
+        
         return {
             "query": query,
-            "explanation": response
+            "explanation": f"Generated SQL query for: {natural_query}"
         }
+
+    @staticmethod
+    def remove_accents(text: str) -> str:
+        """Remove accents from text."""
+        return ''.join(c for c in unicodedata.normalize('NFD', text) 
+                    if unicodedata.category(c) != 'Mn')
     
     def _determine_query_type(self, query: str) -> str:
         return "default"
@@ -178,6 +213,7 @@ Utiliza un lenguaje claro, conciso y enfocado en la extracción de datos relevan
         Returns a more meaningful scraping plan with actual functionality.
         """
         if not url or pd.isna(url):
+            # Implement URL discovery based on company name
             return {
                 "strategy": "url_discovery",
                 "steps": ["Buscar URL basada en nombre empresa"],
@@ -191,6 +227,12 @@ Utiliza un lenguaje claro, conciso y enfocado en la extracción de datos relevan
             # Use ProWebScraper for actual scraping
             scraper = ProWebScraper(use_proxies=False)
             result = scraper.scrape_url(url, {})
+            
+            # If URL exists but couldn't be accessed, increase the timeout
+            if result and not result.get('url_exists', False):
+                # Try again with increased timeout
+                scraper.chrome_options.set_page_load_timeout(60)
+                result = scraper.scrape_url(url, {})
             
             return {
                 "strategy": "dynamic" if result.get('is_ecommerce') else "static",

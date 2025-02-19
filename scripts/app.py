@@ -10,6 +10,8 @@ from scraping import ProWebScraper
 from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA
 import matplotlib.pyplot as plt
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
+import unicodedata
 
 class EnterpriseApp:
     def __init__(self):
@@ -144,7 +146,7 @@ class EnterpriseApp:
                 df.columns = [col.strip().lower() for col in df.columns]
                 
                 # Guardar en base de datos sin batch_id ni created_by
-                result = self.db.save_batch(df)  # Add a parameter to check duplicates
+                result = self.db.save_batch(df, check_duplicates=True)  # Add a parameter to check duplicates
                 
                 st.write("Resultado de save_batch:", result)
                 
@@ -220,35 +222,41 @@ class EnterpriseApp:
     def render_queries(self):
         """Renderiza la sección de consultas (SQL)"""
         st.subheader("🔍 Consultas Avanzadas (SQL)")
-        
+
         query = st.text_area(
             "Escribe tu consulta en lenguaje natural",
             placeholder="Ejemplo: Dame las 10 primeras empresas de Madrid",
             help="Se traducirá a una consulta SQL"
         )
-        
+
         col1, col2 = st.columns([1, 4])
         with col1:
-            if st.button("Ejecutar Consulta"):
-                self.process_query(query)
+            execute_button = st.button("Ejecutar Consulta")
         with col2:
             st.checkbox("Mostrar SQL", value=False, key="show_sql")
         
-        if st.session_state.last_query:
-            with st.expander("📝 Última consulta", expanded=True):
-                if st.session_state.show_sql and "sql" in st.session_state.last_query:
-                    st.code(st.session_state.last_query["sql"], language="sql")
-                # If the result is an aggregate (e.g., a single number) show it as a metric
-                results = st.session_state.last_query.get("results")
-                if results is not None:
-                    if isinstance(results, pd.DataFrame) and results.shape[0] == 1 and results.shape[1] == 1:
-                        value = results.iloc[0, 0]
-                        st.metric("Resultado", value)
-                    else:
-                        st.dataframe(results, use_container_width=True)
-                if "explanation" in st.session_state.last_query:
-                    with st.expander("Explicación LLM"):
-                        st.write(st.session_state.last_query["explanation"])
+        if execute_button and query:
+            self.process_query(query)
+            
+        # Show results only if we have a last query
+        last_query = st.session_state.get("last_query", None)
+        if last_query and "results" in last_query:
+            if st.session_state.show_sql and "sql" in last_query:
+                st.code(last_query["sql"], language="sql")
+                
+            results = last_query["results"]
+            if isinstance(results, pd.DataFrame):
+                st.dataframe(
+                    results,
+                    use_container_width=True,
+                    hide_index=True  # This will hide the narrow index column
+                )
+            elif isinstance(results, (int, float)):
+                st.metric("Resultado", results)
+                
+            if "explanation" in last_query and last_query["explanation"]:
+                with st.expander("Explicación LLM"):
+                    st.write(last_query["explanation"])
 
     def render_scraping(self):
         """Renderiza la sección de web scraping"""
@@ -297,19 +305,79 @@ class EnterpriseApp:
         
         if st.button("Generar Análisis"):
             self.generate_analysis(analysis_type)
+            
+    def remove_accents(text):
+        """Elimina acentos de una cadena de texto."""
+        return ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
+
+    def is_count_query(query):
+        """Detecta si la consulta del usuario es una consulta de conteo."""
+        query_normalized = remove_accents(query.lower())
+
+        # Patrón para detectar frases relacionadas con conteo
+        count_patterns = [
+            r"\bcuantas\b", 
+            r"\bcuantos\b", 
+            r"\bnumero de\b", 
+            r"\btotal de\b"
+        ]
+        
+        return any(re.search(pattern, query_normalized) for pattern in count_patterns)
 
     def process_query(self, query: str):
         """Procesa consultas en lenguaje natural usando DBAgent para generar SQL"""
+        if not query:
+            st.warning("Por favor, introduce una consulta")
+            return
+            
         try:
             with st.spinner("Procesando consulta..."):
+                # Generate the SQL query
                 query_info = self.db_agent.generate_query(query)
-                results = self.db.execute_query(query_info["query"], return_df=True)
+                
+                # Validate query_info
+                if not query_info or not isinstance(query_info, dict):
+                    st.error("El agente no generó una consulta válida")
+                    return
+                    
+                sql_query = query_info.get("query")
+                if not sql_query:
+                    st.error("No se pudo generar una consulta SQL válida")
+                    return
+                
+                # Print the SQL query for debugging
+                print(f"Executing SQL query: {sql_query}")
+                
+                # Execute the query
+                results = self.db.execute_query(sql_query, return_df=True)
+                
+                # Handle query results
+                if results is None:
+                    st.info("La consulta no generó resultados")
+                    return
+                
+                # Format results for count queries
+                if isinstance(results, pd.DataFrame):
+                    if len(results.columns) == 1 and (
+                        results.columns[0].lower() in ['count', 'total'] or 
+                        'count' in results.columns[0].lower()
+                    ):
+                        value = results.iloc[0, 0]
+                        st.metric("Total", f"{value:,}")
+                    else:
+                        st.dataframe(results)
+                
+                # Store query info in session state
                 st.session_state.last_query = {
-                    "sql": query_info["query"],
-                    "results": results
+                    "sql": sql_query,
+                    "results": results,
+                    "explanation": query_info.get("explanation", "")
                 }
+                
         except Exception as e:
             st.error(f"Error al procesar consulta: {str(e)}")
+            import traceback
+            print(f"Query processing error: {traceback.format_exc()}")
 
     def process_scraping(self, limit: int):
         """Procesa el scraping de URLs utilizando procesamiento paralelo y muestra detalles."""
@@ -374,7 +442,7 @@ class EnterpriseApp:
                     'cod_infotel', 'original_url', 'url_exists', 
                     'phones_found', 'social_media_found', 'has_ecommerce'
                 ]],
-                use_container_width=True
+                use_container_width=True,
             )
 
             # Preguntar al usuario si desea aplicar los cambios
