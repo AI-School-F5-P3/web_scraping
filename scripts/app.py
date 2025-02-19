@@ -244,19 +244,10 @@ class EnterpriseApp:
             if st.session_state.show_sql and "sql" in last_query:
                 st.code(last_query["sql"], language="sql")
                 
-            results = last_query["results"]
-            if isinstance(results, pd.DataFrame):
-                st.dataframe(
-                    results,
-                    use_container_width=True,
-                    hide_index=True  # This will hide the narrow index column
-                )
-            elif isinstance(results, (int, float)):
-                st.metric("Resultado", results)
-                
-            if "explanation" in last_query and last_query["explanation"]:
-                with st.expander("Explicación LLM"):
-                    st.write(last_query["explanation"])
+        # Show explanation if available
+        if last_query and "explanation" in last_query and last_query["explanation"]:
+            with st.expander("Explicación LLM"):
+                st.write(last_query["explanation"])
 
     def render_scraping(self):
         """Renderiza la sección de web scraping"""
