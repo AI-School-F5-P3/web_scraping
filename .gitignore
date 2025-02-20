@@ -30,5 +30,7 @@ ENV/
 .venv
 virtualenv/
 scraping_313/ 
+__pycache__/
+*.pyc
 
 # Archivos no necesarios por el momento (mismo proyecto en varias fases)

@@ -1,27 +1,31 @@
 # agents.py
 
 from langchain.agents import Tool, initialize_agent
-from langchain.chains.conversation.memory import ConversationBufferMemory
+from langchain.memory import ConversationBufferMemory
 from langchain.llms.base import LLM
+from langchain.callbacks.manager import CallbackManagerForLLMRun
+from pydantic import Field, BaseModel
 import requests
 import pandas as pd
-from typing import List, Dict, Any
+import re
+from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 from config import LLM_MODELS, OLLAMA_ENDPOINT, PROVINCIAS_ESPANA, HARDWARE_CONFIG
 
 class CustomLLM(LLM):
-    def __init__(self, model_name: str):
-        super().__init__()
-        self.model_name = model_name
-        self.temperature = 0.7
-        self.max_tokens = 2000
-        self.gpu_config = {
-            "use_gpu": HARDWARE_CONFIG["gpu_enabled"],
-            "gpu_layers": -1,
-            "n_gpu_layers": 50
-        }
+    model_name: str = Field(...)
+    temperature: float =  Field(default=0.7)
+    max_tokens: int = Field(default=2000)
+    gpu_config: Dict[str, Any] = Field(default_factory=lambda: {
+        "use_gpu": HARDWARE_CONFIG["gpu_enabled"],
+        "gpu_layers": -1,
+        "n_gpu_layers": 50
+    })
 
-    def _call(self, prompt: str, stop: List[str] = None) -> str:
+    class Config:
+        arbitrary_types_allowed = True
+
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, run_manager: Optional[CallbackManagerForLLMRun] = None) -> str:
         try:
             response = requests.post(
                 OLLAMA_ENDPOINT,
@@ -35,13 +39,25 @@ class CustomLLM(LLM):
                 },
                 timeout=30
             )
+            response.raise_for_status()  # Lanza excepción para códigos 4xx/5xx
             return response.json().get('response', '')
+        except requests.exceptions.RequestException as e:
+            return f"API Error: {str(e)}"
         except Exception as e:
-            return f"Error: {str(e)}"
-
+            return f"Unexpected Error: {str(e)}"
+        
     @property
     def _llm_type(self) -> str:
         return "custom_ollama"
+    
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        return {
+            "model_name": self.model_name,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "gpu_config": self.gpu_config
+        }
 
 class OrchestratorAgent:
     SYSTEM_PROMPT = f"""Eres un experto Director de Operaciones de nivel enterprise para análisis empresarial en España.
@@ -80,8 +96,8 @@ Usuario: "Verificar webs de Barcelona"
 → Validar y actualizar estados URL"""
 
     def __init__(self):
-        self.llm = CustomLLM(LLM_MODELS["orquestador"])
-        self.memory = ConversationBufferMemory()
+        self.llm = CustomLLM(model_name=LLM_MODELS["orquestador"])
+        self.memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
         self.max_workers = HARDWARE_CONFIG["max_workers"]
 
     def process(self, user_input: str) -> Dict[str, Any]:
@@ -141,21 +157,35 @@ OUTPUT REQUERIDO:
 3. Índices recomendados"""
 
     def __init__(self):
-        self.llm = CustomLLM(LLM_MODELS["base_datos"])
+        self.llm = CustomLLM(model_name=LLM_MODELS["base_datos"])
 
     def generate_query(self, natural_query: str) -> Dict[str, Any]:
-        response = self.llm(f"{self.PROMPT}\nConsulta: {natural_query}")
-        query = self._extract_sql(response)
-        return {
-            "query": query,
-            "explanation": response,
-            "sql_type": self._determine_query_type(query)
-        }
+        try:
+            response = self.llm(f"{self.PROMPT}\nConsulta: {natural_query}")
+            query = self._extract_sql(response)
+            return {
+                "query": query,
+                "explanation": response,
+                "sql_type": self._determine_query_type(query)
+            }
+        except Exception as e:
+            return {
+                "query": query,
+                "explanation": f"Error: {str(e)}",
+                "sql_type": "ERROR"
+            }
+        
 
     def _extract_sql(self, response: str) -> str:
-        # Implementar extracción de SQL del texto
-        # Esto dependerá del formato exacto de respuesta del LLM
-        return ""
+        # Buscar bloques de código entre ```
+        code_blocks = re.findall(r'```sql\n(.*?)\n```', response, re.DOTALL)
+        if code_blocks:
+            return code_blocks[0].strip()
+    
+        # Buscar SELECT/INSERT/UPDATE explícitos
+        sql_keywords = r'(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)'
+        matches = re.search(rf'{sql_keywords}.*?;', response, re.DOTALL | re.IGNORECASE)
+        return matches.group(0) if matches else "SELECT * FROM sociedades LIMIT 10;"
 
     def _determine_query_type(self, query: str) -> str:
         query = query.lower()
@@ -201,16 +231,22 @@ REGLAS DE SCRAPING:
 5. Documentar problemas encontrados"""
 
     def __init__(self):
-        self.llm = CustomLLM(LLM_MODELS["scraping"])
+        self.llm = CustomLLM(model_name=LLM_MODELS["scraping"])
 
     def plan_scraping(self, url: str) -> Dict[str, Any]:
-        analysis = self.llm(f"{self.PROMPT}\nURL: {url}")
-        
-        return {
-            "strategy": "dynamic" if "javascript" in analysis.lower() else "static",
-            "steps": analysis.split('\n'),
-            "estimated_resources": self._estimate_resources(url)
-        }
+        try:
+            analysis = self.llm(f"{self.PROMPT}\nURL: {url}")
+            return {
+                "strategy": "dynamic" if "javascript" in analysis.lower() else "static",
+                "steps": analysis.split('\n'),
+                "estimated_resources": self._estimate_resources(url)
+            }
+        except Exception as e:
+            return {
+                "strategy": "ERROR",
+                "steps": [f"Error: {str(e)}"],
+                "estimated_resources": {}
+            }
 
     def _estimate_resources(self, url: str) -> Dict[str, Any]:
         return {
