@@ -516,19 +516,27 @@ def generate_possible_urls(company_name, excel_url=None, provincia=None):
     # Determine domains based on provincia
     base_domains = ['.es', '.com']
     regional_domains = []
-    
+
     if provincia:
-        provincia = provincia.upper() if isinstance(provincia, str) else ""
+        # Normalizar el nombre de provincia para comparación
+        provincia_norm = remove_accents(str(provincia).strip().upper())
+        print(f"Provincia normalizada para comparación: '{provincia_norm}'")
         
-        if provincia in ["BARCELONA", "TARRAGONA", "LERIDA", "LLEIDA", "GERONA", "GIRONA"]:
+        # Cataluña - Dominios .cat
+        if any(city in provincia_norm for city in ["BARCELONA", "TARRAGONA", "LERIDA", "LLEIDA", "GERONA", "GIRONA"]):
             regional_domains.append('.cat')
+            print(f"✓ Dominio regional .cat añadido por provincia: {provincia}")
         
-        if provincia in ["LA CORUÑA", "LUGO", "ORENSE", "PONTEVEDRA", "A CORUÑA", "OURENSE"]:
+        # Galicia - Dominios .gal
+        if any(city in provincia_norm for city in ["LA CORUNA", "LUGO", "ORENSE", "PONTEVEDRA", "A CORUNA", "OURENSE"]):
             regional_domains.append('.gal')
+            print(f"✓ Dominio regional .gal añadido por provincia: {provincia}")
         
-        if provincia in ["ALAVA", "VIZCAYA", "GUIPUZCOA", "ARABA", "BIZKAIA", "GIPUZKOA"]:
+        # País Vasco - Dominios .eus
+        if any(city in provincia_norm for city in ["ALAVA", "VIZCAYA", "GUIPUZCOA", "ARABA", "BIZKAIA", "GIPUZKOA"]):
             regional_domains.append('.eus')
-    
+            print(f"✓ Dominio regional .eus añadido por provincia: {provincia}")
+
     domains = base_domains + regional_domains
     print(f"Dominios a comprobar: {domains}")
     
