@@ -199,6 +199,31 @@ class DatabaseManager:
                 "status": "error",
                 "message": str(e)
             }
+        
+    def delete_rows(self, cod_infotel_list: List[str], batch_id: str) -> Dict[str, Any]:
+        """Elimina registros específicos de un lote"""
+        try:
+            with self.connection.cursor() as cursor:
+                delete_query = """
+                DELETE FROM sociedades 
+                WHERE cod_infotel = ANY(%s)
+                AND lote_id = %s
+                """
+                cursor.execute(delete_query, (cod_infotel_list, batch_id))
+            
+                rows_deleted = cursor.rowcount
+                return {
+                    "status": "success",
+                    "message": f"Se eliminaron {rows_deleted} registros",
+                    "rows_affected": rows_deleted
+                }
+                
+        except Exception as e:
+            self.connection.rollback()
+            return {
+                "status": "error",
+                "message": str(e)
+            }   
 
     def update_scraping_results(self, results: List[Dict[str, Any]], batch_id: str) -> Dict[str, Any]:
         try:

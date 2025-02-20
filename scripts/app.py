@@ -12,7 +12,7 @@ from scraping import ProWebScraper
 from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA
 import numpy as np
 import re
-from typing import Dict, Any, Optional
+from typing import List, Dict, Any, Optional
 import io
 import os
 from pathlib import Path
@@ -241,24 +241,23 @@ class EnterpriseApp:
         
     def init_session_state(self):
         """Inicializa variables de estado"""
-        if "current_batch" not in st.session_state:
-            st.session_state.current_batch = None
-        if "current_user_id" not in st.session_state:
-            st.session_state.current_user_id = None
-        if "current_batch_id" not in st.session_state:
-            st.session_state.current_batch_id = None
-        if "processing_status" not in st.session_state:
-            st.session_state.processing_status = None
-        if "last_query" not in st.session_state:
-            st.session_state.last_query = None
-        if "show_sql" not in st.session_state:
-            st.session_state.show_sql = False
-        if "file_processing_errors" not in st.session_state:
-            st.session_state.file_processing_errors = []
-        if "preview_data" not in st.session_state:
-            st.session_state.preview_data = None
-        if "uploaded_file" not in st.session_state:
-            st.session_state.uploaded_file = None
+        initial_states = {
+            "current_batch": None,
+            "current_user_id": None,
+            "current_batch_id": None,
+            "processing_status": None,
+            "last_query": None,
+            "show_sql": False,
+            "file_processing_errors": [],
+            "preview_data": None,
+            "uploaded_file": None,
+            "selected_rows": [],
+            "delete_mode": None  # None, 'batch', 'selected'
+        }
+    
+        for key, value in initial_states.items():
+            if key not in st.session_state:
+                st.session_state[key] = value
 
     def setup_agents(self):
         """Configuración de agentes inteligentes"""
@@ -331,11 +330,98 @@ class EnterpriseApp:
                 st.session_state.current_batch_id = batch_id
                 st.session_state.uploaded_file = uploaded_file
 
+    def show_loaded_data(self, df: pd.DataFrame):
+        """Muestra los datos cargados con opciones de gestión"""
+        # Panel de información
+        with st.container():
+            col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+            with col1:
+                st.info(f"📦 Lote: {st.session_state.current_batch['id']}")
+            with col2:
+                st.info(f"👤 Usuario: {st.session_state.current_batch['created_by']}")
+            with col3:
+                if st.button("📋 Copiar Lote", key="btn_copy_batch"):
+                    pyperclip.copy(st.session_state.current_batch['id'])
+                    st.success("✅ Copiado!")
+            with col4:
+                if st.button("🗑️ Eliminar Todo", key="btn_delete_all", type="secondary"):
+                    st.session_state.delete_mode = 'batch'
+
+        # Mostrar datos con selección
+        st.dataframe(
+            df,
+            use_container_width=True,
+            column_config={
+                "Seleccionar": st.column_config.CheckboxColumn(
+                    "Seleccionar",
+                    help="Seleccionar fila",
+                    default=False
+                )
+            },
+            height=400
+        )
+    
+        # Panel de acciones
+        if st.session_state.delete_mode:
+            st.error("⚠️ ¿Estás seguro de eliminar los datos?")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✔️ Confirmar Eliminación", key="btn_confirm_delete"):
+                    if st.session_state.delete_mode == 'batch':
+                        self.handle_batch_deletion()
+                    else:
+                        self.delete_selected_rows(st.session_state.selected_rows)
+            with col2:
+                if st.button("❌ Cancelar", key="btn_cancel_delete"):
+                    st.session_state.delete_mode = None
+                    st.rerun()
+        else:
+            col1, col2 = st.columns(2)
+            with col1:
+                # Botón para eliminar todo el lote
+                if st.button("🗑️ Eliminar Todo", key="btn_delete_all", type="secondary"):
+                    st.session_state.delete_mode = 'batch'
+    
+            with col2:
+                # Botón para eliminar selección
+                selected_rows = st.session_state.selected_rows
+                if selected_rows:
+                    if st.button(f"🗑️ Eliminar {len(selected_rows)} seleccionados", 
+                                key="btn_delete_selected",
+                                type="secondary"):
+                        st.session_state.delete_mode = 'selected'
+
+    def handle_batch_deletion(self, batch_id: str = None):
+        """Maneja la eliminación de lotes en la interfaz"""
+        try:
+            # Si no se proporciona batch_id, usar el lote actual
+            if batch_id is None:
+                if not st.session_state.current_batch:
+                    st.warning("No hay datos cargados para eliminar")
+                    return
+                batch_id = st.session_state.current_batch["id"]
+
+            with st.spinner("Eliminando datos..."):
+                result = self.db.delete_batch(batch_id)
+            
+                if result["status"] == "success":
+                    st.success("✅ Datos eliminados correctamente")
+                    # Limpiar todos los estados relacionados
+                    st.session_state.current_batch = None
+                    st.session_state.preview_data = None
+                    st.session_state.current_user_id = None
+                    st.session_state.delete_mode = None
+                    st.rerun()
+                else:
+                    st.error(f"❌ Error al eliminar: {result.get('message', 'Error desconocido')}")
+                    
+        except Exception as e:
+            st.error(f"❌ Error durante la eliminación: {str(e)}")
+
     def load_existing_data(self, search_value: str):
         """Carga datos existentes por lote o identificador"""
         try:
             with st.spinner("Buscando datos..."):
-                # Consultar la base de datos
                 query = """
                 SELECT DISTINCT ON (s.cod_infotel)
                     s.*
@@ -344,9 +430,9 @@ class EnterpriseApp:
                     AND s.deleted = FALSE
                 ORDER BY s.cod_infotel, s.created_at DESC
                 """
-        
+            
                 results = self.db.execute_query(query, (search_value, search_value), return_df=True)
-        
+            
                 if results is not None and not results.empty:
                     # Normalizar nombres de columnas a mayúsculas
                     results.columns = [col.upper() for col in results.columns]
@@ -356,11 +442,14 @@ class EnterpriseApp:
                         "id": results['LOTE_ID'].iloc[0],
                         "data": results,
                         "total_records": len(results),
-                        "timestamp": datetime.now()
+                        "timestamp": datetime.now(),
+                        "created_by": results['CREATED_BY'].iloc[0]
                     }
-                    st.session_state.current_user_id = results['CREATED_BY'].iloc[0]
-            
+                
                     st.success(f"✅ Datos cargados: {len(results)} registros")
+                
+                    # Mostrar datos en el área principal
+                    self.show_loaded_data(results)
                 else:
                     st.error("❌ No se encontraron datos con ese valor")
             
@@ -496,20 +585,21 @@ class EnterpriseApp:
         """Renderiza el contenido principal"""
         st.title("Sistema de Análisis Empresarial 🏢")
     
-        # Panel informativo cuando hay datos cargados
-        if st.session_state.current_batch:
-            with st.container():
-                info_col1, info_col2, info_col3 = st.columns([2, 2, 1])
-                with info_col1:
-                    st.info(f"📦 Lote actual: {st.session_state.current_batch['id']}")
-                with info_col2:
-                    st.info(f"👤 Identificador: {st.session_state.current_user_id}")
-                with info_col3:
-                    if st.button("📋 Copiar Lote", key="btn_copy_current"):
-                        pyperclip.copy(st.session_state.current_batch['id'])
-                        st.success("✅ Copiado!")
+        # Procesar archivo si hay uno nuevo
+        if hasattr(st.session_state, 'uploaded_file') and st.session_state.uploaded_file:
+            self.handle_file_upload(st.session_state.uploaded_file)
+            st.session_state.uploaded_file = None
     
-    # Tabs principales
+        # Mostrar datos si hay previsualización o lote cargado
+        if st.session_state.preview_data is not None:
+            self._show_data_preview(st.session_state.preview_data)
+        elif st.session_state.current_batch is not None:
+            self.show_loaded_data(st.session_state.current_batch['data'])
+    
+        # Separador visual
+        st.divider()
+    
+        # Tabs principales siempre visibles
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
             "📊 Dashboard",
             "🔍 Consultas",
@@ -518,19 +608,8 @@ class EnterpriseApp:
             "⚙️ Gestión"
         ])
     
-        # Procesar archivo si hay uno nuevo
-        if hasattr(st.session_state, 'uploaded_file') and st.session_state.uploaded_file:
-            self.handle_file_upload(st.session_state.uploaded_file)
-            # Limpiar el archivo subido después de procesarlo
-            st.session_state.uploaded_file = None
-    
-        # Contenido de las tabs
         with tab1:
-            if st.session_state.preview_data is not None:
-                self._show_data_preview(st.session_state.preview_data)
-            else:
-                self.render_dashboard()
-            
+            self.render_dashboard()
         with tab2:
             self.render_queries()
         with tab3:
@@ -538,7 +617,32 @@ class EnterpriseApp:
         with tab4:
             self.render_analysis()
         with tab5:
-            self.render_management()
+            self.render_management()    
+
+    def delete_selected_rows(self, indices: List[int]):
+        """Elimina las filas seleccionadas"""
+        try:
+            df = st.session_state.current_batch['data']
+            rows_to_delete = df.iloc[indices]
+        
+            result = self.db.delete_rows(
+                rows_to_delete['COD_INFOTEL'].tolist(),
+                st.session_state.current_batch['id']
+            )
+        
+            if result["status"] == "success":
+                df = df.drop(indices)
+                st.session_state.current_batch['data'] = df
+                st.session_state.current_batch['total_records'] = len(df)
+                st.session_state.selected_rows = []
+                st.session_state.delete_mode = None
+                st.success(f"✅ {len(indices)} registros eliminados correctamente")
+                st.rerun()
+            else:
+                st.error(f"❌ Error al eliminar registros: {result['message']}")
+            
+        except Exception as e:
+            st.error(f"❌ Error durante la eliminación: {str(e)}")
 
     def render_dashboard(self):
         """Renderiza el dashboard con estadísticas"""
