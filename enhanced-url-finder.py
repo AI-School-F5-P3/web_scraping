@@ -232,8 +232,8 @@ def detect_ecommerce(soup):
         'evidence': evidence
     }
 
-def verify_company_url(url, company_name, session):
-    """Verificación mejorada de URLs de empresa."""
+def verify_company_url(url, company_name, session, provincia=None, codigo_postal=None, nif=None):
+    """Verificación mejorada de URLs de empresa con datos del Excel."""
     content = get_page_content(url, session)
     if not content:
         return False, None
@@ -333,6 +333,95 @@ def verify_company_url(url, company_name, session):
         
         data['social_links'] = social_links
         
+        # NUEVO: Verificación de datos del Excel en la página web
+        # Texto completo de la página para buscar coincidencias
+        full_text = soup.get_text().lower()
+        
+        # Inicializar flags para los datos del Excel
+        provincia_found = False
+        codigo_postal_found = False
+        nif_found = False
+        
+        # 1. Verificar si la provincia del Excel aparece en la página
+        if provincia and isinstance(provincia, str):
+            provincia_lower = provincia.lower()
+            # Normalizar provincia sin acentos para la búsqueda
+            provincia_norm = remove_accents(provincia_lower)
+            
+            # Lista de variantes comunes de nombres de provincia
+            provincia_variants = {
+                'a coruña': ['a coruna', 'la coruña', 'la coruna', 'coruña', 'coruna'],
+                'álava': ['alava', 'araba'],
+                'alicante': ['alacant'],
+                'asturias': ['principado de asturias', 'oviedo'],
+                'baleares': ['illes balears', 'islas baleares', 'balears', 'mallorca'],
+                'castellón': ['castellon', 'castello'],
+                'guipúzcoa': ['guipuzcoa', 'gipuzkoa'],
+                'gerona': ['girona'],
+                'lérida': ['lleida', 'lerida'],
+                'orense': ['ourense'],
+                'vizcaya': ['bizkaia'],
+            }
+            
+            # Preparar lista de búsqueda con la provincia y sus variantes
+            search_terms = [provincia_lower, provincia_norm]
+            
+            # Añadir variantes si existen
+            for key, variants in provincia_variants.items():
+                if provincia_lower == key or provincia_lower in variants:
+                    search_terms.extend(variants)
+                    if provincia_lower != key:
+                        search_terms.append(key)
+            
+            # Buscar cada variante en el texto
+            for term in search_terms:
+                if term in full_text:
+                    provincia_found = True
+                    data['provincia_found'] = provincia
+                    print(f"Provincia '{provincia}' encontrada en la página (+15 puntos)")
+                    break
+        
+        # 2. Verificar si el código postal del Excel aparece en la página
+        if codigo_postal and (isinstance(codigo_postal, str) or isinstance(codigo_postal, int)):
+            # Asegurar que el código postal tenga 5 dígitos
+            cp_str = str(codigo_postal).strip()
+            if len(cp_str) == 4:
+                cp_str = '0' + cp_str
+            
+            # Buscar el código postal con diferentes formatos
+            cp_patterns = [
+                rf'\b{cp_str}\b',
+                rf'CP\s*{cp_str}',
+                rf'C\.P\.\s*{cp_str}',
+                rf'Código\s+Postal\s*:?\s*{cp_str}',
+            ]
+            
+            for pattern in cp_patterns:
+                if re.search(pattern, full_text, re.IGNORECASE):
+                    codigo_postal_found = True
+                    data['codigo_postal_found'] = cp_str
+                    print(f"Código postal '{cp_str}' encontrado en la página (+20 puntos)")
+                    break
+        
+        # 3. Verificar si el NIF del Excel aparece en la página
+        if nif and isinstance(nif, str):
+            nif_clean = nif.upper().strip()
+            # Patrones para NIF/CIF español
+            nif_patterns = [
+                rf'\b{nif_clean}\b',
+                rf'NIF\s*:?\s*{nif_clean}',
+                rf'CIF\s*:?\s*{nif_clean}',
+                rf'N\.I\.F\.\s*:?\s*{nif_clean}',
+                rf'C\.I\.F\.\s*:?\s*{nif_clean}',
+            ]
+            
+            for pattern in nif_patterns:
+                if re.search(pattern, full_text, re.IGNORECASE):
+                    nif_found = True
+                    data['nif_found'] = nif_clean
+                    print(f"NIF '{nif_clean}' encontrado en la página (+40 puntos)")
+                    break
+        
         # MODIFICACIÓN: Verificación más flexible para marcas reconocidas
         search_terms = clean_company_name(company_name).split('-')
         search_terms = [term for term in search_terms if len(term) > 2]
@@ -353,12 +442,20 @@ def verify_company_url(url, company_name, session):
             matches = sum(1 for term in search_terms if term in text_to_search)
             score += (matches / len(search_terms)) * 50
         
-        # Resto de puntuación como antes
+        # Puntuación base
         if data['contact_page']:
             score += 15
         if data['phones']:
             score += 15
         score += len([x for x in social_links.values() if x]) * 5
+        
+        # ACTUALIZADO: Asignar puntuación adicional por datos del Excel encontrados
+        if provincia_found:
+            score += 15
+        if codigo_postal_found:
+            score += 20
+        if nif_found:
+            score += 40
         
         data['score'] = score
         print(f"Puntuación de verificación para {url}: {score}")
@@ -457,7 +554,7 @@ def generate_possible_urls(company_name, excel_url=None, provincia=None):
     
     return list(valid_domains), False
 
-def verify_urls_parallel(urls, company_name):
+def verify_urls_parallel(urls, company_name, provincia=None, codigo_postal=None, nif=None):
     def verify_single_url(url):
         # Añadir esta validación al inicio de la función
         if not url.startswith(('http://', 'https://')):
@@ -467,7 +564,7 @@ def verify_urls_parallel(urls, company_name):
         try:
             print(f"\nIniciando verificación de {url}")
             future = concurrent.futures.ThreadPoolExecutor().submit(
-                verify_company_url, url, company_name, session
+                verify_company_url, url, company_name, session, provincia, codigo_postal, nif
             )
             is_valid, data = future.result(timeout=8)
             return url, is_valid, data
@@ -512,7 +609,7 @@ def get_whois_info(domain):
     except:
         return None
 
-def process_excel(file_path, url_column='URL', provincia_column='NOM_PROVINCIA'):
+def process_excel(file_path, url_column='URL', provincia_column='NOM_PROVINCIA', cp_column='COD_POSTAL', nif_column='NIF'):
     """Procesa un archivo Excel con nombres de empresas y URLs."""
     _, ext = os.path.splitext(file_path)
     cache = URLCache()
@@ -541,6 +638,9 @@ def process_excel(file_path, url_column='URL', provincia_column='NOM_PROVINCIA')
     df['Tiene_Ecommerce'] = False
     df['Ecommerce_Score'] = 0
     df['Ecommerce_Evidencia'] = ''
+    df['Provincia_En_Web'] = False
+    df['CP_En_Web'] = False
+    df['NIF_En_Web'] = False
     
     print("\nProcesando URLs...")
     for idx, row in tqdm(df.iterrows(), total=len(df), desc="Verificando empresas"):
@@ -548,7 +648,19 @@ def process_excel(file_path, url_column='URL', provincia_column='NOM_PROVINCIA')
             print(f"\nProcesando empresa {idx + 1}: {row['RAZON_SOCIAL']}")
             company_name = row['RAZON_SOCIAL']
             excel_url = row[url_column] if pd.notna(row[url_column]) else None
+            
+            # Obtener datos adicionales del Excel
             provincia = row[provincia_column] if provincia_column in row and pd.notna(row[provincia_column]) else None
+            
+            codigo_postal = None
+            if cp_column in row and pd.notna(row[cp_column]):
+                cp_value = row[cp_column]
+                if isinstance(cp_value, (int, float)):
+                    codigo_postal = str(int(cp_value)).zfill(5)  # Asegurar 5 dígitos
+                else:
+                    codigo_postal = str(cp_value).strip().zfill(5)
+            
+            nif = row[nif_column] if nif_column in row and pd.notna(row[nif_column]) else None
             
             # Check cache first
             cached_urls, cached_data = cache.get(company_name)
@@ -565,7 +677,7 @@ def process_excel(file_path, url_column='URL', provincia_column='NOM_PROVINCIA')
                     # Verify Excel URL first
                     session = create_session()
                     print(f"Verificando URL del Excel: {possible_urls[0]}")
-                    is_valid, data = verify_company_url(possible_urls[0], company_name, session)
+                    is_valid, data = verify_company_url(possible_urls[0], company_name, session, provincia, codigo_postal, nif)
                     session.close()
                     
                     if is_valid:
@@ -582,7 +694,7 @@ def process_excel(file_path, url_column='URL', provincia_column='NOM_PROVINCIA')
                         batch_urls = possible_urls[i:i+4]
                         print(f"Verificando batch de URLs: {batch_urls}")
                         
-                        batch_results = verify_urls_parallel(batch_urls, company_name)
+                        batch_results = verify_urls_parallel(batch_urls, company_name, provincia, codigo_postal, nif)
                         if batch_results:
                             # Check if any URL in batch has high score
                             for url, data in batch_results.items():
@@ -621,6 +733,11 @@ def process_excel(file_path, url_column='URL', provincia_column='NOM_PROVINCIA')
                 max_ecommerce_score = 0
                 all_evidence = []
                 
+                # Nuevas flags para los datos de Excel encontrados
+                provincia_en_web = False
+                cp_en_web = False
+                nif_en_web = False
+                
                 for data in verification_data.values():
                     if 'phones' in data:
                         all_phones.extend(data['phones'])
@@ -634,6 +751,14 @@ def process_excel(file_path, url_column='URL', provincia_column='NOM_PROVINCIA')
                         if data['ecommerce_data']['score'] > max_ecommerce_score:
                             max_ecommerce_score = data['ecommerce_data']['score']
                         all_evidence.extend(data['ecommerce_data']['evidence'])
+                    
+                    # Comprobar si se encontraron datos del Excel
+                    if 'provincia_found' in data:
+                        provincia_en_web = True
+                    if 'codigo_postal_found' in data:
+                        cp_en_web = True
+                    if 'nif_found' in data:
+                        nif_en_web = True
                 
                 # Update DataFrame with collected data
                 unique_phones = list(dict.fromkeys(all_phones))[:3]
@@ -649,6 +774,11 @@ def process_excel(file_path, url_column='URL', provincia_column='NOM_PROVINCIA')
                 df.at[idx, 'Tiene_Ecommerce'] = has_ecommerce
                 df.at[idx, 'Ecommerce_Score'] = max_ecommerce_score
                 df.at[idx, 'Ecommerce_Evidencia'] = '; '.join(all_evidence)
+                
+                # Guardar flags de datos del Excel encontrados
+                df.at[idx, 'Provincia_En_Web'] = provincia_en_web
+                df.at[idx, 'CP_En_Web'] = cp_en_web
+                df.at[idx, 'NIF_En_Web'] = nif_en_web
                 
                 # Try to get WHOIS information
                 try:
