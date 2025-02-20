@@ -1,14 +1,17 @@
 import psycopg2
 import pandas as pd
+import numpy as np
 from typing import Optional, List, Dict, Any
 from psycopg2.extras import execute_values
 from config import DB_CONFIG, HARDWARE_CONFIG, TIMEOUT_CONFIG
 import platform
+from db_validator import DataProcessor
 
 class DatabaseManager:
     def __init__(self):
         self.connection = psycopg2.connect(**DB_CONFIG)
         self.connection.autocommit = True
+        self.data_processor = DataProcessor()
         self._optimize_connection()
         self.create_table_if_not_exists()
 
@@ -72,12 +75,23 @@ class DatabaseManager:
         errors = []
 
         try:
+            # Convertir strings vacíos y espacios en blanco a None/NULL
+            df = df.replace(r'^\s*$', None, regex=True)
+            # Convertir NaN a None
+            df = df.replace({np.nan: None})
+            
             df_chunks = [df[i:i + chunk_size] for i in range(0, len(df), chunk_size)]
             
             with self.connection.cursor() as cursor:
                 for chunk in df_chunks:
                     try:
-                        values = [tuple(row) for row in chunk[columns].values]
+                        # Convertir los valores a una lista de tuplas, reemplazando string vacío por None
+                        values = [
+                            tuple(None if (isinstance(v, str) and v.strip() == '') else v 
+                                  for v in row)
+                            for row in chunk[columns].values
+                        ]
+                        
                         insert_query = f"""
                         INSERT INTO {table} ({', '.join(columns)})
                         VALUES %s
@@ -112,25 +126,39 @@ class DatabaseManager:
                 "errors": errors
             }
 
-
     def save_batch(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
-        Guarda un lote de registros evitando duplicados por cod_infotel
+        Procesa y guarda un lote de registros evitando duplicados
         """
-        insert_columns = [
-            'cod_infotel', 'nif', 'razon_social', 'domicilio', 'cod_postal',
-            'nom_poblacion', 'nom_provincia', 'url'
-        ]
-        
         try:
-            # Primero, obtener los cod_infotel existentes
+            # Limpiar strings vacíos y espacios en blanco antes del procesamiento
+            df = df.replace(r'^\s*$', None, regex=True)
+            df = df.replace({np.nan: None})
+            
+            # Procesar y validar datos
+            processed_df, errors = self.data_processor.process_dataframe(df)
+            
+            if errors:
+                return {
+                    "status": "error",
+                    "message": "Errores de validación",
+                    "errors": errors
+                }
+            
+            # Columnas para inserción
+            insert_columns = [
+                'cod_infotel', 'nif', 'razon_social', 'domicilio', 'cod_postal',
+                'nom_poblacion', 'nom_provincia', 'url', 'url_exists', 'url_limpia',
+                'url_status'
+            ]
+            
+            # Obtener códigos existentes
             query = "SELECT cod_infotel FROM sociedades"
             existing_df = self.execute_query(query, return_df=True)
             
             if existing_df is not None and not existing_df.empty:
-                # Filtrar los registros que no existen en la base de datos
                 existing_codes = set(existing_df['cod_infotel'].tolist())
-                new_records = df[~df['cod_infotel'].isin(existing_codes)]
+                new_records = processed_df[~processed_df['cod_infotel'].isin(existing_codes)]
                 
                 if new_records.empty:
                     return {
@@ -140,11 +168,9 @@ class DatabaseManager:
                         "message": "No hay nuevos registros para insertar"
                     }
                 
-                # Realizar la inserción solo con los registros nuevos
                 return self.batch_insert(new_records, 'sociedades', insert_columns)
             else:
-                # Si no hay registros existentes, insertar todo
-                return self.batch_insert(df, 'sociedades', insert_columns)
+                return self.batch_insert(processed_df, 'sociedades', insert_columns)
                 
         except Exception as e:
             return {
@@ -153,7 +179,7 @@ class DatabaseManager:
                 "inserted": 0,
                 "total": len(df)
             }
-        
+                    
     def get_urls_for_scraping(self, batch_id: str = None, limit: int = 100) -> pd.DataFrame:
         query = """
         SELECT cod_infotel, url

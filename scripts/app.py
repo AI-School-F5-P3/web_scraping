@@ -2,6 +2,7 @@
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 from datetime import datetime
 import time
 from agents import DBAgent, ScrapingAgent  # Removed OrchestratorAgent
@@ -63,7 +64,7 @@ class EnterpriseApp:
     def render_sidebar(self):
         """Renderiza la barra lateral con opciones de carga y filtros"""
         with st.sidebar:
-            st.image("../images/logo.png", width=200)  # Asegúrate de tener el logo en tu directorio
+            st.image("images/logo.png", width=200)  # Asegúrate de tener el logo en tu directorio
             st.title("Control Panel")
             
             # Sección de carga de archivos
@@ -127,9 +128,12 @@ class EnterpriseApp:
                 # Normalizar nombres de columnas
                 df.columns = [col.strip().lower() for col in df.columns]
                 
-                # Guardar en base de datos sin batch_id ni created_by
-                result = self.db.save_batch(df)  # Add a parameter to check duplicates
+                # Limpiar datos antes de guardar
+                df = df.replace(r'^\s*$', None, regex=True)  # Convertir strings vacíos y espacios en blanco a None
+                df = df.replace({np.nan: None})  # Convertir NaN a None
                 
+                # Guardar en base de datos
+                result = self.db.save_batch(df)
 
                 if result["status"] == "success":
                     st.session_state.current_batch = {
@@ -143,7 +147,7 @@ class EnterpriseApp:
                 
         except Exception as e:
             st.error(f"❌ Error al procesar archivo: {str(e)}")
-
+            
     def render_dashboard(self):
         """Renderiza el dashboard con estadísticas"""
         if not st.session_state.current_batch:
