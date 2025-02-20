@@ -164,9 +164,7 @@ def detect_ecommerce(soup):
             'añadir al carrito', 'add to cart', 'comprar ahora', 'buy now',
             'realizar pedido', 'checkout', 'agregar al carrito', 'comprar', 'tienda online'
         ],
-        'precios': [
-            '€', 'eur', 'euros', 'precio', 'price', 'pvp'
-        ],
+        
         'elementos_tienda': [
             'tienda', 'shop', 'store', 'catálogo', 'catalog', 'productos', 'products'
         ]
