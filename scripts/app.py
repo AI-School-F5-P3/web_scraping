@@ -314,7 +314,13 @@ class EnterpriseApp:
                 delta=None,
             )
         
-        total_with_web = len(df[df['url'].notna()])
+        valid_url_series = df['url'].apply(
+            lambda x: isinstance(x, str) and x.strip() != '' and 
+                    (x.strip().lower().startswith("http://") or 
+                    x.strip().lower().startswith("https://") or 
+                    x.strip().lower().startswith("www."))
+        )
+        total_with_web = valid_url_series.sum()
         with col2:
             st.metric(
                 "Con Web",
@@ -333,7 +339,7 @@ class EnterpriseApp:
         with col4:
             st.metric(
                 "Última actualización",
-                st.session_state.current_batch['timestamp'].strftime("%Y-%m-%d %H:%M")
+                st.session_state.current_batch['timestamp'].strftime("%d-%m-%Y")
             )
         
         # Enhanced charts section
@@ -646,20 +652,27 @@ class EnterpriseApp:
             
     def render_url_status_chart(self, df):
         """Renderiza el gráfico de estado de URLs con mejor diseño"""
-        valid_url = df['url'].apply(
+        valid_url_series = df['url'].apply(
             lambda x: isinstance(x, str) and x.strip() != '' and 
-                      (x.strip().lower().startswith("http://") or 
-                       x.strip().lower().startswith("https://") or 
-                       x.strip().lower().startswith("www."))
+                    (x.strip().lower().startswith("http://") or 
+                    x.strip().lower().startswith("https://") or 
+                    x.strip().lower().startswith("www."))
         )
-        url_status = valid_url.value_counts()
-        
-        fig, ax = plt.subplots(figsize=(8, 8))
+        count_valid = valid_url_series.sum()
+        count_invalid = len(valid_url_series) - count_valid
+
+        # Configurar los datos del gráfico
+        counts = [count_valid, count_invalid]
+        labels = [
+            f"Con URL\n({count_valid:,})",
+            f"Sin URL\n({count_invalid:,})"
+        ]
         colors = ['#3498db', '#e74c3c']
+
+        fig, ax = plt.subplots(figsize=(8, 8))
         wedges, texts, autotexts = ax.pie(
-            url_status.values,
-            labels=[f"Con URL\n({url_status[True]:,})" if True in url_status else "",
-                   f"Sin URL\n({url_status[False]:,})" if False in url_status else ""],
+            counts,
+            labels=labels,
             colors=colors,
             autopct='%1.1f%%',
             startangle=90
