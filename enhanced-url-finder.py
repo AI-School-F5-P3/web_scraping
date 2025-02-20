@@ -437,8 +437,8 @@ def generate_possible_urls(company_name, excel_url=None, provincia=None):
     
     # Generate progressive word combinations
     word_combinations = []
-    for i in range(len(words)):
-        combination = ''.join(words[:i+1])
+    for i in range(len(words), 0, -1):  # Cambiado para ir de más a menos
+        combination = ''.join(words[:i])
         word_combinations.append(combination)
         print(f"Generando combinación: {combination}")
     
@@ -667,7 +667,7 @@ def process_excel(file_path, url_column='URL', provincia_column='NOM_PROVINCIA')
             print(f"Error procesando empresa {idx + 1}: {str(e)}")
             continue
     
-    output_file = os.path.splitext(file_path)[0] + '_procesado_19feb.xlsx'
+    output_file = os.path.splitext(file_path)[0] + '_procesado_20feb.xlsx'
     try:
         df.to_excel(output_file, index=False, engine='openpyxl')
         return output_file
