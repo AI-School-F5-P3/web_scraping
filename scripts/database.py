@@ -135,9 +135,13 @@ class DatabaseManager:
             df = df.replace(r'^\s*$', None, regex=True)
             df = df.replace({np.nan: None})
             
+            # 🔹 Asegurar limpieza de espacios en blanco antes de guardar
+            df = self.data_processor.validator.clean_text_fields(df)
+            df['nom_provincia'] = df['nom_provincia'].astype(str).str.strip()    
+            
             # Procesar y validar datos
             processed_df, errors = self.data_processor.process_dataframe(df)
-            
+
             if errors:
                 return {
                     "status": "error",
@@ -282,18 +286,29 @@ class DatabaseManager:
     def reset_database(self):
         """Elimina y recrea la tabla sociedades"""
         try:
-            # Primero eliminamos la tabla si existe
-            drop_query = "DROP TABLE IF EXISTS sociedades CASCADE;"
-            self.execute_query(drop_query)
-            
-            # Luego recreamos la tabla con el índice único
-            self.create_table_if_not_exists()
-            
-            return {
-                "status": "success",
-                "message": "Base de datos reiniciada exitosamente"
-            }
+            with self.connection.cursor() as cursor:
+                # Forzar cierre de cualquier conexión activa a la tabla
+                cursor.execute("""
+                    SELECT pg_terminate_backend(pid) 
+                    FROM pg_stat_activity 
+                    WHERE pid <> pg_backend_pid()
+                    AND datname = current_database()
+                """)
+                
+                # Eliminar la tabla si existe
+                cursor.execute("DROP TABLE IF EXISTS sociedades CASCADE;")
+                self.connection.commit()
+                
+                # Recrear la tabla desde cero
+                self.create_table_if_not_exists()
+                self.connection.commit()
+                
+                return {
+                    "status": "success",
+                    "message": "Base de datos reiniciada exitosamente"
+                }
         except Exception as e:
+            self.connection.rollback()
             return {
                 "status": "error",
                 "message": f"Error al reiniciar la base de datos: {str(e)}"

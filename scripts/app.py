@@ -46,16 +46,21 @@ class EnterpriseApp:
             if df is not None and not df.empty:
                 # Normalizar nombres de columnas a minúsculas
                 df.columns = df.columns.str.strip().str.lower()
+                
+                # 🔹 Asegurar limpieza de espacios en blanco
+                df['nom_provincia'] = df['nom_provincia'].astype(str).str.strip()
+                
                 # Check for duplicates by a unique identifier (e.g., NIF or cod_infotel)
                 if 'cod_infotel' in df.columns:
                     df = df.drop_duplicates(subset=['cod_infotel'], keep='first')
+                    
                 st.session_state.current_batch = {
                     "id": "loaded_from_db",
                     "data": df,
                     "total_records": len(df),
                     "timestamp": datetime.now()
                 }
-
+            
     def setup_agents(self):
         """Configuración de agentes inteligentes"""
         self.db_agent = DBAgent()
@@ -79,12 +84,18 @@ class EnterpriseApp:
                 self.handle_file_upload(uploaded_file)
             
             if st.button("Borrar BBDD"):
-                self.db.reset_database()
-                # Limpiar la variable que contiene los datos cargados
-                st.session_state.current_batch = None
-                st.success("Base de datos reiniciada exitosamente.")
-                st.rerun()  # Fuerza la recarga de la app
-
+                with st.spinner("Borrando base de datos..."):
+                    result = self.db.reset_database()
+                    if result["status"] == "success":
+                        # Limpiar todas las variables de estado
+                        st.session_state.clear()
+                        # Reinicializar las variables de estado necesarias
+                        self.init_session_state()
+                        st.success("Base de datos reiniciada exitosamente.")
+                        st.rerun()  # Esto reiniciará la app limpia sin recargar el Excel
+                    else:
+                        st.error(f"Error al reiniciar la base de datos: {result['message']}")
+                        
     def render_main_content(self):
         """Renderiza el contenido principal"""
         st.title("Sistema de Análisis Empresarial 🏢")
@@ -162,15 +173,14 @@ class EnterpriseApp:
         
         with col1:
             st.metric("Total Registros", f"{st.session_state.current_batch['total_records']:,}")
-        
-        total_with_web = len(st.session_state.current_batch['data'][
-            st.session_state.current_batch['data']['url'].notna()
-        ])
+            total_with_web = len(st.session_state.current_batch['data']
+            [st.session_state.current_batch['data']['url'].notna()])
+            
         with col2:
             st.metric("Con Web", f"{total_with_web:,}")
         
-        unique_provinces = st.session_state.current_batch['data']['nom_provincia'].nunique()
-        with col3:
+        with col3:  
+            unique_provinces = st.session_state.current_batch['data']['nom_provincia'].nunique()
             st.metric("Provincias", unique_provinces)
         
         with col4:

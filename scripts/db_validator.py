@@ -10,6 +10,15 @@ from typing import Tuple
 
 class DataValidator:
     @staticmethod
+    def clean_text_fields(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Limpia espacios en blanco al inicio y final de todas las columnas de texto.
+        """
+        df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+
+        return df
+        
+    @staticmethod
     def validate_cod_infotel(df: pd.DataFrame) -> Tuple[bool, str]:
         """
         Valida que COD_INFOTEL sean valores únicos y no contenga nulos
@@ -94,6 +103,9 @@ class DataProcessor:
         Procesa el DataFrame aplicando todas las validaciones y transformaciones
         """
         errors = []
+
+        # Limpiar campos de texto
+        df = self.validator.clean_text_fields(df)        
         
         # Validar COD_INFOTEL
         is_valid, message = self.validator.validate_cod_infotel(df)
