@@ -109,10 +109,17 @@ def clean_company_name(company_name):
     name = name.lower().strip()
     name = re.sub(r'[^\w\s-]', '', name)
     name = name.replace(' ', '-')
-    name = re.sub(r'(-sa|-s\.a\.|sa)$', '', name, flags=re.IGNORECASE)
-    name = re.sub(r'(-sl|-s\.l\.|sl)$', '', name, flags=re.IGNORECASE)
-    name = name.rstrip('-')
     
+    # Patrones extendidos para eliminar diferentes variantes
+    patterns = [
+        r'(-sa|-s\.a\.|sa|sociedad-anonima|sociedad-anonyma)$',
+        r'(-sl|-s\.l\.|sl|sociedad-limitada)$'
+    ]
+    
+    for pattern in patterns:
+        name = re.sub(pattern, '', name, flags=re.IGNORECASE)
+    
+    name = name.rstrip('-')
     return name
 
 def create_session():
