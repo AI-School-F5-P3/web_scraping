@@ -514,7 +514,7 @@ def generate_possible_urls(company_name, excel_url=None, provincia=None):
     print(f"Palabras limpias: {words}")
     
     # Determine domains based on provincia
-    base_domains = ['.es', '.com', '.net', '.org']
+    base_domains = ['.es', '.com']
     regional_domains = []
     
     if provincia:
