@@ -7,7 +7,8 @@ import time
 from agents import DBAgent, ScrapingAgent  # Removed OrchestratorAgent
 from database import DatabaseManager
 from scraping import ProWebScraper
-from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA
+from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA, LLM_MODELS
+from agents import CustomLLM
 import matplotlib.pyplot as plt
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
@@ -29,7 +30,7 @@ class EnterpriseApp:
             initial_sidebar_state="expanded"
         )
         
-        # Add custom CSS for better styling
+        # Add custom CSS with adjusted sidebar spacing
         st.markdown("""
             <style>
                 /* Main container styling */
@@ -37,9 +38,20 @@ class EnterpriseApp:
                     padding: 2rem;
                 }
                 
-                /* Sidebar styling */
+                /* Sidebar styling with reduced spacing */
                 .css-1d391kg {
-                    padding: 2rem 1rem;
+                    padding: 1rem 0.5rem;
+                }
+                
+                /* Reduce spacing between sidebar elements */
+                .sidebar .element-container {
+                    margin-bottom: 0.5rem !important;
+                }
+                
+                /* Sidebar headers with less margin */
+                .sidebar h1, .sidebar h2, .sidebar h3 {
+                    margin-bottom: 0.5rem !important;
+                    margin-top: 0.5rem !important;
                 }
                 
                 /* Card-like containers */
@@ -81,27 +93,20 @@ class EnterpriseApp:
                     background-color: #155987;
                 }
                 
-                /* Card containers for metrics */
-                div.element-container:has(div.stMetric) {
-                    background-color: #ffffff;
-                    border-radius: 0.5rem;
-                    padding: 1rem;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                    margin-bottom: 1rem;
+                /* Reduce spacing in selectbox */
+                .stSelectbox {
+                    margin-bottom: 0.5rem !important;
                 }
                 
-                /* Header styling */
-                h1, h2, h3 {
-                    color: #2c3e50;
-                    margin-bottom: 1.5rem;
+                                /* Change tab underline color to purple (#642678) */
+                .stTabs [data-baseweb="tab-highlight"] {
+                    background-color: #642678 !important;
                 }
                 
-                /* File uploader styling */
-                .stFileUploader {
-                    border: 2px dashed #ccc;
-                    border-radius: 0.5rem;
-                    padding: 1rem;
-                    margin-bottom: 1.5rem;
+                /* Also update the active tab background to match */
+                .stTabs [data-baseweb="tab"][aria-selected="true"] {
+                    background-color: #642678;
+                    color: white;
                 }
             </style>
         """, unsafe_allow_html=True)
@@ -116,6 +121,11 @@ class EnterpriseApp:
             st.session_state.last_query = None
         if "show_sql" not in st.session_state:
             st.session_state.show_sql = False
+        # Initialize with default models from config
+        if "sql_model" not in st.session_state:
+            st.session_state.sql_model = LLM_MODELS["base_datos"]
+        if "scraping_model" not in st.session_state:
+            st.session_state.scraping_model = LLM_MODELS["scraping"]
             
     def load_data_from_db(self):
         """Si no hay datos en sesión, se cargan desde la BD"""
@@ -135,18 +145,65 @@ class EnterpriseApp:
                 }
 
     def setup_agents(self):
-        """Configuración de agentes inteligentes"""
-        self.db_agent = DBAgent()
-        self.scraping_agent = ScrapingAgent()
+        """Configuración de agentes inteligentes teniendo en cuenta el modelo seleccionado"""
+        try:
+            # Create new instances of agents with selected models
+            self.db_agent = DBAgent()
+            self.db_agent.llm = CustomLLM(st.session_state.sql_model, provider="groq")
+            
+            self.scraping_agent = ScrapingAgent()
+            self.scraping_agent.llm = CustomLLM(st.session_state.scraping_model)
+        except Exception as e:
+            st.error(f"Error al configurar agentes: {str(e)}")
 
     def render_sidebar(self):
         """Renderiza la barra lateral con opciones de carga y filtros"""
         with st.sidebar:
-            st.image("images/logo.png", width=200)  # Asegúrate de tener el logo en tu directorio
-            st.title("Control Panel")
+            st.image("images/logo.png", width=200)
             
-            # Sección de carga de archivos
-            st.header("📤 Carga de Datos")
+            # Model Selection Section
+            st.subheader("🤖 Configuración de Modelos")
+            
+            # SQL model selection (only Groq model for database queries)
+            sql_models = {
+                "Base de datos (Groq)": LLM_MODELS["base_datos"]
+            }
+            
+            selected_sql_model = st.selectbox(
+                "Modelo para Consultas SQL",
+                list(sql_models.keys()),
+                index=0,  # Only one option available
+                help="Modelo Groq para consultas SQL"
+            )
+            
+            # Scraping model selection
+            scraping_models = {
+                "Web Scraping": LLM_MODELS["scraping"]
+            }
+            
+            selected_scraping_model = st.selectbox(
+                "Modelo para Web Scraping",
+                list(scraping_models.keys()),
+                index=0,  # Only one option available
+                help="Modelo para análisis de web scraping"
+            )
+            
+            # Update models if changed
+            if selected_sql_model != st.session_state.sql_model:
+                st.session_state.sql_model = selected_sql_model
+                self.setup_agents()
+                
+            if selected_scraping_model != st.session_state.scraping_model:
+                st.session_state.scraping_model = selected_scraping_model
+                self.setup_agents()
+                
+            # Display current models (for debugging/verification)
+            with st.expander("Modelos actuales"):
+                st.write(f"SQL: {st.session_state.sql_model}")
+                st.write(f"Scraping: {st.session_state.scraping_model}")
+            
+            # File Upload Section
+            st.subheader("📤 Carga de Datos")
             uploaded_file = st.file_uploader(
                 "Seleccionar archivo (CSV/XLSX)",
                 type=["csv", "xlsx"],
@@ -156,9 +213,9 @@ class EnterpriseApp:
             if uploaded_file:
                 self.handle_file_upload(uploaded_file)
             
-            # Filtros
+            # Filters Section
             if st.session_state.current_batch:
-                st.header("🔍 Filtros")
+                st.subheader("🔍 Filtros")
                 selected_provincia = st.selectbox(
                     "Provincia",
                     ["Todas"] + PROVINCIAS_ESPANA
@@ -169,13 +226,13 @@ class EnterpriseApp:
                 
                 if st.button("Aplicar Filtros"):
                     self.apply_filters(selected_provincia, has_web, has_ecommerce)
-                    
-            if st.button("Borrar BBDD"):
+            
+            # Database Reset Button
+            if st.button("Borrar BBDD", help="Reinicia la base de datos"):
                 self.db.reset_database()
-                # Limpiar la variable que contiene los datos cargados
                 st.session_state.current_batch = None
                 st.success("Base de datos reiniciada exitosamente.")
-                st.rerun()  # Fuerza la recarga de la app
+                st.rerun()
 
     def render_main_content(self):
         """Renderiza el contenido principal con UI mejorada"""

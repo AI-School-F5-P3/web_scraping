@@ -58,11 +58,10 @@ if not GROQ_API_KEY:
 # Configuración de Ollama
 OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
 LLM_MODELS = {
-    # "orquestador": "deepseek-r1:latest",
     # For querying the database, use the desired Groq model:
     "base_datos": "deepseek-r1-distill-llama-70b",
     # For scraping tasks, we can keep the existing model or update as needed:
-    "scraping": "llama3.1:8b"
+    "scraping": "qwen-2.5-32b"
 }
 
 # Columnas requeridas para ingesta
