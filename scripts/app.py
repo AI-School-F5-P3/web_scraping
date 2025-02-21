@@ -449,59 +449,40 @@ class EnterpriseApp:
         return any(re.search(pattern, query_normalized) for pattern in count_patterns)
 
     def process_query(self, query: str):
-        """Procesa consultas en lenguaje natural usando DBAgent para generar SQL"""
-        if not query:
-            st.warning("Por favor, introduce una consulta")
-            return
-            
         try:
             with st.spinner("Procesando consulta..."):
-                # Generate the SQL query
+                # Generate query
                 query_info = self.db_agent.generate_query(query)
                 
-                # Validate query_info
-                if not query_info or not isinstance(query_info, dict):
-                    st.error("El agente no generó una consulta válida")
+                # Check for errors
+                if query_info.get("error"):
+                    st.error(query_info["error"])
                     return
                     
-                sql_query = query_info.get("query")
-                if not sql_query:
-                    st.error("No se pudo generar una consulta SQL válida")
-                    return
+                # Execute query
+                results = self.db.execute_query(query_info["query"], return_df=True)
                 
-                # Print the SQL query for debugging
-                print(f"Executing SQL query: {sql_query}")
+                # Handle different query types
+                if query_info["query_type"] == "count":
+                    value = results.iloc[0, 0]
+                    st.metric("Total", f"{value:,}")
+                elif query_info["query_type"] == "aggregate":
+                    st.dataframe(results)
+                    # Add visualization if needed
+                else:
+                    st.dataframe(results)
                 
-                # Execute the query
-                results = self.db.execute_query(sql_query, return_df=True)
-                
-                # Handle query results
-                if results is None:
-                    st.info("La consulta no generó resultados")
-                    return
-                
-                # Format results for count queries
-                if isinstance(results, pd.DataFrame):
-                    if len(results.columns) == 1 and (
-                        results.columns[0].lower() in ['count', 'total'] or 
-                        'count' in results.columns[0].lower()
-                    ):
-                        value = results.iloc[0, 0]
-                        st.metric("Total", f"{value:,}")
-                    else:
-                        st.dataframe(results)
-                
-                # Store query info in session state
-                st.session_state.last_query = {
-                    "sql": sql_query,
-                    "results": results,
-                    "explanation": query_info.get("explanation", "")
-                }
-                
+                # Show SQL if requested
+                if st.session_state.show_sql:
+                    st.code(query_info["query"], language="sql")
+                    
+                # Show explanation
+                if query_info["explanation"]:
+                    with st.expander("Explicación"):
+                        st.write(query_info["explanation"])
+                        
         except Exception as e:
             st.error(f"Error al procesar consulta: {str(e)}")
-            import traceback
-            print(f"Query processing error: {traceback.format_exc()}")
 
     def process_scraping(self, limit: int):
         """Procesa el scraping de URLs utilizando procesamiento paralelo y muestra detalles."""

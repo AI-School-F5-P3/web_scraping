@@ -6,12 +6,14 @@ from langchain.llms.base import LLM
 from langchain_groq import ChatGroq
 import requests
 import pandas as pd
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 from config import GROQ_API_KEY, PROVINCIAS_ESPANA, HARDWARE_CONFIG
 import re
 from scraping import ProWebScraper
 import unicodedata
+from dataclasses import dataclass, field
+from enum import Enum
 
 class CustomLLM(LLM):
     def __init__(self, model_name: str, provider: str = "groq"):
@@ -56,135 +58,299 @@ class CustomLLM(LLM):
     class Config:
         extra = "allow"
 
+class QueryType(Enum):
+    COUNT = "count"
+    TABLE = "table"
+    AGGREGATE = "aggregate"
+    NON_DB = "non_db"
+
+@dataclass
+class QueryContext:
+    """Stores context about the query being processed"""
+    query_type: QueryType = QueryType.TABLE
+    has_url_filter: bool = False
+    has_ecommerce_filter: bool = False
+    has_social_filter: bool = False
+    province: Optional[str] = None
+    limit: int = 10
+    specified_columns: List[str] = field(default_factory=list)
+
 class DBAgent:
-    PROMPT = """Eres un Arquitecto SQL Senior especializado en análisis empresarial para la base de datos "guardarail" en España. Tu tarea es transformar consultas en lenguaje natural a SQL válido y preciso. Responde únicamente a preguntas relacionadas con la base de datos y sus columnas. Si la petición no está relacionada con la base de datos, responde: "Solo puedo ayudarte con información relacionada con la base de datos guardarail."
+    ALLOWED_COLUMNS = [
+        'cod_infotel', 'nif', 'razon_social', 'domicilio', 'cod_postal',
+        'nom_poblacion', 'nom_provincia', 'url', 'e_commerce',
+        'telefono_1', 'telefono_2', 'telefono_3'
+    ]
 
-# Reglas:
-1. **Columnas permitidas:**
-   - cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3.
-2. **Seguridad:** Solo genera sentencias SELECT. Nunca INSERT, UPDATE o DELETE.
-3. **Límites:**
-   - Si la consulta no especifica un límite numérico y es de filas, añade 'LIMIT 10' por defecto.
-   - Para consultas de agregación (conteo), utiliza COUNT(*) y no añadas LIMIT.
-4. **Normalización y comparaciones:**
-   - Todas las comparaciones de texto deben realizarse sin distinguir acentos ni mayúsculas (usa ILIKE en SQL).
-   - Corrige errores ortográficos comunes en nombres de provincias (por ejemplo, 'barclona' → 'barcelona') eliminando acentos.
-5. **Filtros adicionales:**
-   - Si la consulta indica "con url" o "que tengan url", añade la condición: `AND url IS NOT NULL AND url <> ''`.
-   - Si la consulta menciona "con e-commerce" o similar, añade: `AND e_commerce = true`.
-6. **Formato SQL:**
-   - Usa mayúsculas para todas las keywords SQL (SELECT, FROM, WHERE, etc.).
-   - Emplea alias descriptivos, por ejemplo, 'total' para COUNT(*).
-7. **Ambigüedad:**
-   - Si la petición es ambigua, mal formulada o requiere suposiciones, responde en lenguaje natural solicitando más detalles: "¿Podrías especificar mejor la consulta? Por ejemplo, indica la provincia o el criterio adicional que deseas aplicar."
-8. **Errores o columnas no admitidas:**
-   - Si se mencionan columnas o funciones no disponibles, responde: "No puedo ayudarte con esa información. Las columnas disponibles son: cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3."
+    # Keywords that indicate a query is not database-related
+    NON_DB_KEYWORDS = [
+        'tiempo', 'clima', 'temperatura', 'pronóstico',
+        'hora', 'fecha', 'noticias', 'tráfico'
+    ]
 
-# Ejemplos:
+    # Social media related keywords
+    SOCIAL_KEYWORDS = [
+        'youtube', 'linkedin', 'facebook', 'twitter', 
+        'instagram', 'tiktok', 'redes sociales'
+    ]
 
-- **Consulta de filas:**
-  - "Dame las 10 primeras empresas de Madrid" →
-    ```sql
-    SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3
-    FROM sociedades
-    WHERE nom_provincia ILIKE '%madrid%'
-    LIMIT 10;
-    ```
-  - "Dame las empresas de Ávila que tengan url" →
-    ```sql
-    SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3
-    FROM sociedades
-    WHERE nom_provincia ILIKE '%avila%' AND url IS NOT NULL AND url <> ''
-    LIMIT 10;
-    ```
-- **Consulta de agregación:**
-  - "¿Cuántas empresas hay en Barcelona?" →
-    ```sql
-    SELECT COUNT(*) AS total
-    FROM sociedades
-    WHERE nom_provincia ILIKE '%barcelona%';
-    ```
-  - "¿Cuántas tiendas online hay en Valencia?" →
-    ```sql
-    SELECT COUNT(*) AS total
-    FROM sociedades
-    WHERE nom_provincia ILIKE '%valencia%' AND e_commerce = true;
-    ```
+    PROMPT = """Eres un Arquitecto SQL Senior especializado en análisis empresarial. Tu tarea es generar consultas SQL precisas para la base de datos 'guardarail' o identificar cuando una consulta no está relacionada con la base de datos.
 
-# Si la consulta no es sobre la base de datos, responde:
-"Solo puedo ayudarte con información relacionada con la base de datos guardarail."
+INPUT: Consulta en lenguaje natural
+OUTPUT: JSON con la siguiente estructura:
+{
+    "query": "SQL query",
+    "explanation": "Explicación de la consulta",
+    "query_type": "count|table|aggregate|non_db",
+    "error": "Mensaje de error si aplica"
+}
+
+REGLAS IMPORTANTES:
+1. Si la consulta no está relacionada con empresas o la base de datos (ej: tiempo, noticias):
+   - Establecer query_type: "non_db"
+   - Establecer error: "Esta consulta no está relacionada con la base de datos de empresas"
+
+2. Para consultas de proporción/porcentaje:
+   - Usar query_type: "aggregate"
+   - Generar consulta WITH para calcular porcentajes
+
+3. Para consultas sobre redes sociales:
+   - Indicar que esta información no está disponible actualmente
+   - Sugerir consultar datos disponibles (URL, e-commerce)
+
+EJEMPLOS DE MANEJO DE CASOS ESPECIALES:
+
+1. Consulta no relacionada:
+Input: "¿Cuál es el tiempo en Madrid?"
+Output: {
+    "query": null,
+    "explanation": "Esta consulta es sobre el clima y no sobre la base de datos de empresas",
+    "query_type": "non_db",
+    "error": "Esta consulta no está relacionada con la base de datos de empresas"
+}
+
+2. Consulta de proporción:
+Input: "¿Qué proporción de empresas de Madrid tienen URL?"
+Output: {
+    "query": "WITH total AS (SELECT COUNT(*) AS total_count FROM sociedades WHERE nom_provincia ILIKE '%madrid%') SELECT COUNT(*) AS url_count, ROUND(COUNT(*) * 100.0 / total.total_count, 2) AS percentage FROM sociedades, total WHERE nom_provincia ILIKE '%madrid%' AND url IS NOT NULL AND LENGTH(TRIM(url)) > 0 AND (url ILIKE 'http%' OR url ILIKE 'www.%')",
+    "explanation": "Cálculo del porcentaje de empresas en Madrid que tienen URL válida",
+    "query_type": "aggregate"
+}
+
+3. Consulta de redes sociales:
+Input: "Dame las empresas de Barcelona con YouTube"
+Output: {
+    "query": null,
+    "explanation": "Actualmente no disponemos de información sobre redes sociales. Solo tenemos datos de URL y e-commerce",
+    "query_type": "non_db",
+    "error": "Información de redes sociales no disponible"
+}
 """
 
     def __init__(self):
-        # Use Groq for querying the database
         self.llm = None
 
+    def analyze_query(self, query: str) -> QueryContext:
+        """Analyzes the natural language query to extract key information"""
+        query_normalized = self.remove_accents(query.lower())
+        ctx = QueryContext()
+
+        # Check if query is non-database related
+        if any(keyword in query_normalized for keyword in self.NON_DB_KEYWORDS):
+            ctx.query_type = QueryType.NON_DB
+            return ctx
+
+        # Check if query involves social media
+        if any(keyword in query_normalized for keyword in self.SOCIAL_KEYWORDS):
+            ctx.query_type = QueryType.NON_DB
+            return ctx
+
+        # Detect query type
+        if any(word in query_normalized for word in [
+            "proporcion", "porcentaje", "ratio", "comparacion"
+        ]):
+            ctx.query_type = QueryType.AGGREGATE
+        elif any(word in query_normalized for word in [
+            "cuantas", "cuantos", "numero de", "total de", "cuenta"
+        ]):
+            ctx.query_type = QueryType.COUNT
+
+        # Extract filters
+        ctx.has_url_filter = any(term in query_normalized for term in [
+            "con web", "tienen web", "con url", "tienen url"
+        ])
+        ctx.has_ecommerce_filter = any(term in query_normalized for term in [
+            "e-commerce", "ecommerce", "tienda online"
+        ])
+
+        # Extract province
+        for province in self.get_provinces():
+            if province.lower() in query_normalized:
+                ctx.province = province
+                break
+
+        # Extract limit
+        match = re.search(r'\b(\d+)\b', query)
+        if match:
+            ctx.limit = int(match.group(1))
+
+        return ctx
+
     def generate_query(self, natural_query: str) -> Dict[str, Any]:
-        """Genera consulta SQL a partir de lenguaje natural."""
-        # Normalizar la consulta quitando acentos y en minúsculas
-        query_normalized = self.remove_accents(natural_query.lower())
-        
-        # Detectar si es consulta de conteo
-        is_count = any(word in query_normalized for word in ["cuantas", "cuantos", "numero de", "total de", "cuenta"])
-        
-        # Extraer provincia si se menciona
-        provinces = [p.lower() for p in PROVINCIAS_ESPANA]
-        province = next((p for p in provinces if p in query_normalized), None)
-        
-        # Detectar si se pide filtrar por URL válida
-        filter_url = "con url" in query_normalized or "que tengan url" in query_normalized
-        
-        # Construir cláusula WHERE
-        where_clauses = []
-        if province:
-            where_clauses.append(f"nom_provincia ILIKE '%{province}%'")
-        if filter_url:
-            # Se agregan condiciones para que la url sea válida
-            where_clauses.append("url IS NOT NULL")
-            where_clauses.append("TRIM(url) <> ''")
-            where_clauses.append("(url ILIKE 'http://%' OR url ILIKE 'https://%' OR url ILIKE 'www.%')")
-        
-        where_clause = ""
-        if where_clauses:
-            where_clause = "WHERE " + " AND ".join(where_clauses)
-        
-        if is_count:
-            # Consulta de conteo no lleva LIMIT
-            query = f"""
-            SELECT COUNT(*) AS total
-            FROM sociedades
-            {where_clause};
-            """
-        else:
-            # Extraer límite numérico si se menciona; de lo contrario, LIMIT 10
-            # Aquí se puede hacer un análisis extra para detectar un número en la consulta
-            # Por simplicidad, se usa LIMIT 10 si no se detecta
-            limit = 10
-            # Ejemplo: Si se detecta "10" en la consulta y no hay otra información, usar ese valor
-            match = re.search(r'\b(\d+)\b', natural_query)
-            if match:
-                limit = int(match.group(1))
-            query = f"""
-            SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, 
-                nom_poblacion, nom_provincia, url 
-            FROM sociedades
-            {where_clause}
-            LIMIT {limit};
-            """
-        
+        """Generates SQL query from natural language input"""
+        try:
+            ctx = self.analyze_query(natural_query)
+
+            if ctx.query_type == QueryType.NON_DB:
+                if any(keyword in natural_query.lower() for keyword in self.SOCIAL_KEYWORDS):
+                    return {
+                        "query": None,
+                        "explanation": "Actualmente no disponemos de información sobre redes sociales. Solo tenemos datos de URL y e-commerce.",
+                        "query_type": "non_db",
+                        "error": "Información de redes sociales no disponible"
+                    }
+                return {
+                    "query": None,
+                    "explanation": "Esta consulta no está relacionada con la base de datos de empresas",
+                    "query_type": "non_db",
+                    "error": "Esta consulta no está relacionada con la base de datos de empresas"
+                }
+
+            if ctx.query_type == QueryType.AGGREGATE:
+                return self.generate_aggregate_query(ctx)
+            elif ctx.query_type == QueryType.COUNT:
+                return self.generate_count_query(ctx)
+            else:
+                return self.generate_table_query(ctx)
+
+        except Exception as e:
+            return {
+                "query": None,
+                "explanation": None,
+                "error": str(e),
+                "query_type": "error"
+            }
+
+    def generate_aggregate_query(self, ctx: QueryContext) -> Dict[str, Any]:
+        """Generates aggregate query with percentages"""
+        where_clauses = self.build_where_clauses(ctx)
+        base_where = where_clauses.replace("WHERE ", "") if where_clauses else "TRUE"
+
+        sql = f"""
+        WITH total AS (
+            SELECT COUNT(*) AS total_count 
+            FROM sociedades 
+            WHERE {base_where}
+        )
+        SELECT 
+            COUNT(*) AS filtered_count,
+            ROUND(COUNT(*) * 100.0 / total.total_count, 2) AS percentage
+        FROM sociedades, total
+        {where_clauses}
+        """
+
         return {
-            "query": query.strip(),
-            "explanation": f"Generated SQL query for: {natural_query}"
+            "query": sql.strip(),
+            "explanation": self.generate_explanation(ctx),
+            "query_type": "aggregate",
+            "error": None
+        }
+
+    def generate_count_query(self, ctx: QueryContext) -> Dict[str, Any]:
+        """Generates COUNT query based on context"""
+        where_clauses = self.build_where_clauses(ctx)
+        
+        sql = f"""
+        SELECT COUNT(*) AS total
+        FROM sociedades
+        {where_clauses}
+        """
+
+        return {
+            "query": sql.strip(),
+            "explanation": self.generate_explanation(ctx),
+            "query_type": "count",
+            "error": None
+        }
+
+    def generate_table_query(self, ctx: QueryContext) -> Dict[str, Any]:
+        """Generates table query based on context"""
+        where_clauses = self.build_where_clauses(ctx)
+        
+        columns = ctx.specified_columns or self.ALLOWED_COLUMNS
+        columns_str = ", ".join(columns)
+        
+        sql = f"""
+        SELECT {columns_str}
+        FROM sociedades
+        {where_clauses}
+        LIMIT {ctx.limit}
+        """
+
+        return {
+            "query": sql.strip(),
+            "explanation": self.generate_explanation(ctx),
+            "query_type": "table",
+            "error": None
         }
 
     @staticmethod
     def remove_accents(text: str) -> str:
-        """Remove accents from text."""
-        return ''.join(c for c in unicodedata.normalize('NFD', text) 
-                    if unicodedata.category(c) != 'Mn')
-    
-    def _determine_query_type(self, query: str) -> str:
-        return "default"
+        """Removes accents from text"""
+        return ''.join(c for c in unicodedata.normalize('NFD', text)
+                      if unicodedata.category(c) != 'Mn')
+
+    @staticmethod
+    def get_provinces() -> List[str]:
+        """Returns list of Spanish provinces"""
+        return [
+            "Madrid", "Barcelona", "Valencia", "Sevilla", "Zaragoza",
+            "Málaga", "Murcia", "Palma", "Las Palmas", "Bilbao",
+            # Add more provinces as needed
+        ]
+
+    def build_where_clauses(self, ctx: QueryContext) -> str:
+        """Builds WHERE clause based on query context"""
+        clauses = []
+        
+        if ctx.province:
+            clauses.append(f"nom_provincia ILIKE '%{ctx.province}%'")
+            
+        if ctx.has_url_filter:
+            clauses.extend([
+                "url IS NOT NULL",
+                "LENGTH(TRIM(url)) > 0",
+                "(url ILIKE 'http%' OR url ILIKE 'www.%')"
+            ])
+            
+        if ctx.has_ecommerce_filter:
+            clauses.append("e_commerce = true")
+            
+        if clauses:
+            return "WHERE " + " AND ".join(clauses)
+        return ""
+
+    def generate_explanation(self, ctx: QueryContext) -> str:
+        """Generates human-readable explanation of the query"""
+        parts = []
+        
+        if ctx.query_type == QueryType.COUNT:
+            parts.append("Conteo de empresas")
+        elif ctx.query_type == QueryType.AGGREGATE:
+            parts.append("Cálculo de proporción de empresas")
+        else:
+            parts.append("Listado de empresas")
+            
+        if ctx.province:
+            parts.append(f"en {ctx.province}")
+            
+        if ctx.has_url_filter:
+            parts.append("con URL válida")
+            
+        if ctx.has_ecommerce_filter:
+            parts.append("con e-commerce")
+            
+        return " ".join(parts)
 
 class ScrapingAgent:
     PROMPT = """Eres un Ingeniero de Web Scraping Elite especializado en análisis empresarial. Tu tarea es la siguiente:

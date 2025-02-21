@@ -45,18 +45,12 @@ PROVINCIAS_ESPANA = [
     'Vizcaya', 'Zamora', 'Zaragoza'
 ]
 
-# Configuración de Ollama (if you still use it for some tasks)
-# OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
-
 # Configuración de Groq
 # Add the Groq API key here and update the model for database queries.
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY not found in environment variables")
 # Dado que la librería de Groq gestiona internamente el endpoint, no es necesario especificarlo.
-
-# Configuración de Ollama
-# OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
 
 # Modelos para consultas SQL (Groq)
 SQL_MODELS = {
