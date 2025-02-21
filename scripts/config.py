@@ -5,6 +5,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Add LangSmith configurations
+LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
+LANGSMITH_PROJECT = "enterprise-analysis"
+LANGSMITH_TRACE_ALL = True
+
 # Configuración de Base de Datos
 DB_CONFIG = {
     "host": os.getenv("DB_HOST", "localhost"),
