@@ -8,13 +8,13 @@ import requests
 import pandas as pd
 from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
-from config import LLM_MODELS, GROQ_API_KEY, OLLAMA_ENDPOINT, PROVINCIAS_ESPANA, HARDWARE_CONFIG
+from config import GROQ_API_KEY, PROVINCIAS_ESPANA, HARDWARE_CONFIG
 import re
 from scraping import ProWebScraper
 import unicodedata
 
 class CustomLLM(LLM):
-    def __init__(self, model_name: str, provider: str = "ollama"):
+    def __init__(self, model_name: str, provider: str = "groq"):
         super().__init__()
         self.model_name = model_name
         self.temperature = 0.7
@@ -28,38 +28,20 @@ class CustomLLM(LLM):
 
     def _call(self, prompt: str, stop: List[str] = None) -> str:
         try:
-            if self.provider == "groq":
-                response = requests.post(
-                    # Using the Groq library default endpoint if not provided, or rely on the client.
-                    # For our example, we assume the client library uses GROQ_API_KEY internally.
-                    # If you need to call a specific endpoint, you could add that logic here.
-                    # We'll assume the Groq library handles it.
-                    # For illustration, we simply send the API key in the payload.
-                    "https://api.groq.cloud/generate",
-                    json={
-                        "model": self.model_name,
-                        "prompt": prompt,
-                        "temperature": self.temperature,
-                        "max_tokens": self.max_tokens,
-                        "stream": False,
-                        **self.gpu_config,
-                        "api_key": GROQ_API_KEY
-                    },
-                    timeout=30
-                )
-            else:
-                response = requests.post(
-                    OLLAMA_ENDPOINT,
-                    json={
-                        "model": self.model_name,
-                        "prompt": prompt,
-                        "temperature": self.temperature,
-                        "max_tokens": self.max_tokens,
-                        "stream": False,
-                        **self.gpu_config
-                    },
-                    timeout=30
-                )
+            # Solo se usa Groq
+            response = requests.post(
+                "https://api.groq.cloud/generate",
+                json={
+                    "model": self.model_name,
+                    "prompt": prompt,
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens,
+                    "stream": False,
+                    **self.gpu_config,
+                    "api_key": GROQ_API_KEY
+                },
+                timeout=30
+            )
             return response.json().get('response', '')
         except Exception as e:
             return f"Error: {str(e)}"
@@ -69,110 +51,129 @@ class CustomLLM(LLM):
 
     @property
     def _llm_type(self) -> str:
-        return "custom_groq" if self.provider == "groq" else "custom_ollama"
+        return "custom_groq"
     
     class Config:
         extra = "allow"
 
 class DBAgent:
-    PROMPT = """Eres un Arquitecto SQL Senior especializado en análisis empresarial español. Genera SQL válido o respuestas en lenguaje natural (español) según corresponda.
-    
+    PROMPT = """Eres un Arquitecto SQL Senior especializado en análisis empresarial para la base de datos "guardarail" en España. Tu tarea es transformar consultas en lenguaje natural a SQL válido y preciso. Responde únicamente a preguntas relacionadas con la base de datos y sus columnas. Si la petición no está relacionada con la base de datos, responde: "Solo puedo ayudarte con información relacionada con la base de datos guardarail."
+
 # Reglas:
 1. **Columnas permitidas:**
    - cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3.
-2. **Seguridad:** Solo genera SELECT. Nunca INSERT, UPDATE o DELETE.
-3. **Límites:** Si la consulta no especifica un límite, añade 'LIMIT 10' por defecto.
-4. **Geografía:** Si la consulta menciona una ubicación sin especificar si es ciudad o provincia, asume que es provincia (nom_provincia) a menos que se indique lo contrario.
-5. **Normalización:**
-   - Corrige errores ortográficos en nombres de provincias (ej. 'barclona' → 'barcelona').
-   - Elimina acentos para evitar fallos en ILIKE.
-   - Usa ILIKE para todas las comparaciones de texto.
+2. **Seguridad:** Solo genera sentencias SELECT. Nunca INSERT, UPDATE o DELETE.
+3. **Límites:**
+   - Si la consulta no especifica un límite numérico y es de filas, añade 'LIMIT 10' por defecto.
+   - Para consultas de agregación (conteo), utiliza COUNT(*) y no añadas LIMIT.
+4. **Normalización y comparaciones:**
+   - Todas las comparaciones de texto deben realizarse sin distinguir acentos ni mayúsculas (usa ILIKE en SQL).
+   - Corrige errores ortográficos comunes en nombres de provincias (por ejemplo, 'barclona' → 'barcelona') eliminando acentos.
+5. **Filtros adicionales:**
+   - Si la consulta indica "con url" o "que tengan url", añade la condición: `AND url IS NOT NULL AND url <> ''`.
+   - Si la consulta menciona "con e-commerce" o similar, añade: `AND e_commerce = true`.
 6. **Formato SQL:**
-   - Usa mayúsculas para keywords SQL (SELECT, WHERE, etc.).
-   - Usa alias descriptivos (ej. 'total' para COUNT(*)).
-7. **Consultas ambiguas o erróneas:**
-   - Si la petición es ambigua, está mal formulada o requiere suposiciones, responde en lenguaje natural solicitando clarificación.
-   - Si la consulta menciona columnas, tablas o funciones no admitidas, responde: "No puedo ayudarte con esa información. Las columnas disponibles son: [listar_columnas]".
-8. **Criterios de filtro:**
-   - Si la consulta no especifica ningún criterio, omite la cláusula WHERE.
-   - Si no hay suficientes datos para generar SQL, responde en español: "No encuentro datos para tu consulta. ¿Podrías reformularla?".
-9. **Consulta de agregación:** Para consultas de conteo, utiliza COUNT(*) y no añade LIMIT.
+   - Usa mayúsculas para todas las keywords SQL (SELECT, FROM, WHERE, etc.).
+   - Emplea alias descriptivos, por ejemplo, 'total' para COUNT(*).
+7. **Ambigüedad:**
+   - Si la petición es ambigua, mal formulada o requiere suposiciones, responde en lenguaje natural solicitando más detalles: "¿Podrías especificar mejor la consulta? Por ejemplo, indica la provincia o el criterio adicional que deseas aplicar."
+8. **Errores o columnas no admitidas:**
+   - Si se mencionan columnas o funciones no disponibles, responde: "No puedo ayudarte con esa información. Las columnas disponibles son: cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3."
 
-# Ejemplos de consultas de filas:
-- "Dame las 10 primeras empresas de Madrid" →
-  ```sql
-  SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3 
-  FROM sociedades 
-  WHERE nom_provincia ILIKE '%madrid%'
-  LIMIT 10;
-  ```
-- "Empresas en Málaga con e-commerce activo" →
-  ```sql
-  SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3 
-  FROM sociedades 
-  WHERE nom_provincia ILIKE '%malaga%' AND e_commerce = true 
-  LIMIT 10;
-  ```
+# Ejemplos:
 
-# Ejemplos de consultas agregadas:
-- "¿Cuántas empresas hay en Barcelona?" →
-  ```sql
-  SELECT COUNT(*) AS total FROM sociedades WHERE nom_provincia ILIKE '%barcelona%';
-  ```
-- "¿Cuántas tiendas online hay en Valencia?" →
-  ```sql
-  SELECT COUNT(*) AS total FROM sociedades WHERE nom_provincia ILIKE '%valencia%' AND e_commerce = true;
-  ```
+- **Consulta de filas:**
+  - "Dame las 10 primeras empresas de Madrid" →
+    ```sql
+    SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3
+    FROM sociedades
+    WHERE nom_provincia ILIKE '%madrid%'
+    LIMIT 10;
+    ```
+  - "Dame las empresas de Ávila que tengan url" →
+    ```sql
+    SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3
+    FROM sociedades
+    WHERE nom_provincia ILIKE '%avila%' AND url IS NOT NULL AND url <> ''
+    LIMIT 10;
+    ```
+- **Consulta de agregación:**
+  - "¿Cuántas empresas hay en Barcelona?" →
+    ```sql
+    SELECT COUNT(*) AS total
+    FROM sociedades
+    WHERE nom_provincia ILIKE '%barcelona%';
+    ```
+  - "¿Cuántas tiendas online hay en Valencia?" →
+    ```sql
+    SELECT COUNT(*) AS total
+    FROM sociedades
+    WHERE nom_provincia ILIKE '%valencia%' AND e_commerce = true;
+    ```
 
-# Respuestas en lenguaje natural:
-- Si la petición es ambigua: "¿Podrías especificar la provincia o ciudad?".
-- Si se piden datos no disponibles: "No tengo información sobre esa columna. Las columnas disponibles son: cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3.".
-- Si no se puede generar SQL: "No encuentro datos para tu consulta. ¿Podrías reformularla?".
+# Si la consulta no es sobre la base de datos, responde:
+"Solo puedo ayudarte con información relacionada con la base de datos guardarail."
 """
 
     def __init__(self):
         # Use Groq for querying the database
-        self.llm = CustomLLM(LLM_MODELS["base_datos"], provider="groq")
+        self.llm = None
 
     def generate_query(self, natural_query: str) -> Dict[str, Any]:
-        """Generate SQL query from natural language."""
-        # Normalize the query text
+        """Genera consulta SQL a partir de lenguaje natural."""
+        # Normalizar la consulta quitando acentos y en minúsculas
         query_normalized = self.remove_accents(natural_query.lower())
         
-        # Check if it's a count query
+        # Detectar si es consulta de conteo
         is_count = any(word in query_normalized for word in ["cuantas", "cuantos", "numero de", "total de", "cuenta"])
         
-        # Extract province name if present
+        # Extraer provincia si se menciona
         provinces = [p.lower() for p in PROVINCIAS_ESPANA]
         province = next((p for p in provinces if p in query_normalized), None)
         
-        if is_count and province:
-            # Generate count query with province filter
+        # Detectar si se pide filtrar por URL válida
+        filter_url = "con url" in query_normalized or "que tengan url" in query_normalized
+        
+        # Construir cláusula WHERE
+        where_clauses = []
+        if province:
+            where_clauses.append(f"nom_provincia ILIKE '%{province}%'")
+        if filter_url:
+            # Se agregan condiciones para que la url sea válida
+            where_clauses.append("url IS NOT NULL")
+            where_clauses.append("TRIM(url) <> ''")
+            where_clauses.append("(url ILIKE 'http://%' OR url ILIKE 'https://%' OR url ILIKE 'www.%')")
+        
+        where_clause = ""
+        if where_clauses:
+            where_clause = "WHERE " + " AND ".join(where_clauses)
+        
+        if is_count:
+            # Consulta de conteo no lleva LIMIT
             query = f"""
-            SELECT COUNT(*) as total 
-            FROM sociedades 
-            WHERE LOWER(nom_provincia) LIKE '%{province}%';
-            """
-        elif province:
-            # Generate regular query with province filter
-            query = f"""
-            SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, 
-                nom_poblacion, nom_provincia, url 
-            FROM sociedades 
-            WHERE LOWER(nom_provincia) LIKE '%{province}%'
-            LIMIT {5 if '5' in natural_query else 10};
+            SELECT COUNT(*) AS total
+            FROM sociedades
+            {where_clause};
             """
         else:
-            # Default query
-            query = """
+            # Extraer límite numérico si se menciona; de lo contrario, LIMIT 10
+            # Aquí se puede hacer un análisis extra para detectar un número en la consulta
+            # Por simplicidad, se usa LIMIT 10 si no se detecta
+            limit = 10
+            # Ejemplo: Si se detecta "10" en la consulta y no hay otra información, usar ese valor
+            match = re.search(r'\b(\d+)\b', natural_query)
+            if match:
+                limit = int(match.group(1))
+            query = f"""
             SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, 
                 nom_poblacion, nom_provincia, url 
-            FROM sociedades 
-            LIMIT 10;
+            FROM sociedades
+            {where_clause}
+            LIMIT {limit};
             """
         
         return {
-            "query": query,
+            "query": query.strip(),
             "explanation": f"Generated SQL query for: {natural_query}"
         }
 
@@ -206,7 +207,7 @@ class ScrapingAgent:
 Utiliza un lenguaje claro, conciso y enfocado en la extracción de datos relevantes para análisis empresarial."""
     
     def __init__(self):
-        self.llm = CustomLLM(LLM_MODELS["scraping"])
+        self.llm = None
     
     def plan_scraping(self, url: str) -> dict:
         """

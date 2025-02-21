@@ -46,7 +46,7 @@ PROVINCIAS_ESPANA = [
 ]
 
 # Configuración de Ollama (if you still use it for some tasks)
-OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
+# OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
 
 # Configuración de Groq
 # Add the Groq API key here and update the model for database queries.
@@ -56,12 +56,22 @@ if not GROQ_API_KEY:
 # Dado que la librería de Groq gestiona internamente el endpoint, no es necesario especificarlo.
 
 # Configuración de Ollama
-OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
-LLM_MODELS = {
-    # For querying the database, use the desired Groq model:
-    "base_datos": "deepseek-r1-distill-llama-70b",
-    # For scraping tasks, we can keep the existing model or update as needed:
-    "scraping": "qwen-2.5-32b"
+# OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
+
+# Modelos para consultas SQL (Groq)
+SQL_MODELS = {
+    "deepseek-r1": "deepseek-r1-distill-llama-70b",
+    "gemma2": "gemma2-9b-it",
+    "llama-3.3": "llama-3.3-70b-versatile",
+    "qwen-2.5": "qwen-2.5-32b",
+}
+
+# Modelos para web scraping
+SCRAPING_MODELS = {
+    "qwen-2.5": "qwen-2.5-32b",
+    "gemma2": "gemma2-9b-it",
+    "llama-3.3": "llama-3.3-70b-versatile",
+    "deepseek-r1": "deepseek-r1-distill-llama-70b"
 }
 
 # Columnas requeridas para ingesta
