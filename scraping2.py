@@ -25,7 +25,8 @@ import socket
 urllib3.disable_warnings(InsecureRequestWarning)
 def signal_handler(signum, frame):
     print("\nPrograma interrumpido por el usuario. Guardando progreso...")
-    sys.exit(0)
+    print("Cerrando hilos pendientes...")
+    os._exit(1)  # Salida forzada del proceso
 
 signal.signal(signal.SIGINT, signal_handler)
 class RateLimiter:
@@ -234,6 +235,7 @@ def detect_ecommerce(soup):
 
 def verify_company_url(url, company_name, session, provincia=None, codigo_postal=None, nif=None):
     """Verificación mejorada de URLs de empresa con datos del Excel."""
+    
     content = get_page_content(url, session)
     if not content:
         return False, None
@@ -580,7 +582,7 @@ def generate_possible_urls(company_name, excel_url=None, provincia=None):
                 
                 word_combinations.add(base_combination + next_word + 'group')
 
-    # INSERTAR AQUÍ: Crear un segundo conjunto de variaciones eliminando la primera palabra
+    # Crear un segundo conjunto de variaciones eliminando la primera palabra
     if len(words) > 1 and words[0] not in ['grupo']:
         # Obtener palabras sin la primera
         words_without_first = words[1:]
@@ -630,8 +632,13 @@ def generate_possible_urls(company_name, excel_url=None, provincia=None):
     return list(valid_domains), False
 
 def verify_urls_parallel(urls, company_name, provincia=None, codigo_postal=None, nif=None):
+    interrupted = False
     def verify_single_url(url):
+        
         # Añadir esta validación al inicio de la función
+        if interrupted:
+            return url, False, None
+            
         if not url.startswith(('http://', 'https://')):
             url = 'https://' + url
             
@@ -650,24 +657,38 @@ def verify_urls_parallel(urls, company_name, provincia=None, codigo_postal=None,
             session.close()
 
     results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        futures = {executor.submit(verify_single_url, url): url for url in urls}
-        done, _ = concurrent.futures.wait(
-            futures, 
-            timeout=10,  # Timeout global reducido
-            return_when=concurrent.futures.FIRST_COMPLETED
-        )
-        
-        for future in done:
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {executor.submit(verify_single_url, url): url for url in urls}
             try:
-                url, is_valid, data = future.result(timeout=1)
-                if is_valid:
-                    results[url] = data
-            except Exception:
-                continue
-
-        executor._threads.clear()
-        concurrent.futures.thread._threads_queues.clear()
+                done, _ = concurrent.futures.wait(
+                    futures, 
+                    timeout=10,
+                    return_when=concurrent.futures.FIRST_COMPLETED
+                )
+                
+                for future in done:
+                    try:
+                        url, is_valid, data = future.result(timeout=1)
+                        if is_valid:
+                            results[url] = data
+                    except Exception:
+                        continue
+            except KeyboardInterrupt:
+                interrupted = True
+                print("\nInterrupción detectada, cancelando tareas pendientes...")
+                for future in futures:
+                    future.cancel()
+                raise
+    except KeyboardInterrupt:
+        print("\nInterrupción detectada en el nivel principal...")
+        
+    # Limpiar hilos que puedan haber quedado
+    for t in threading.enumerate():
+        if t != threading.main_thread():
+            print(f"Forzando finalización del hilo: {t.name}")
+            if hasattr(t, "_stop"):
+                t._stop()
     
     return results
 
@@ -745,7 +766,7 @@ def process_excel(file_path, url_column='URL', provincia_column='NOM_PROVINCIA',
                 verification_data = cached_data
             else:
                 verification_data = {}
-                all_valid_urls_data = {}  # Diccionario para almacenar datos de URLs válidas (score >= 60)
+                all_valid_urls_data = {}
                 max_score = 0
                 best_url_data = None
                 
@@ -760,31 +781,51 @@ def process_excel(file_path, url_column='URL', provincia_column='NOM_PROVINCIA',
                     session.close()
                     
                     if is_valid and data.get('score', 0) >= 60:
+                        # Si la URL del Excel tiene una puntuación >= 60, usamos directamente esta y no generamos más
                         all_valid_urls_data[possible_urls[0]] = data
-                        if data.get('score', 0) > max_score:
-                            max_score = data.get('score', 0)
-                            best_url_data = {possible_urls[0]: data}
-                    
-                    # Generar más URLs independientemente del resultado de la URL del Excel
-                    additional_urls, _ = generate_possible_urls(company_name, None, provincia)
-                    possible_urls.extend(additional_urls)
-                
-                # Process all URLs to find the one with highest score >= 60
-                for i in range(0, len(possible_urls), 4):  # Process in batches of 4
-                    batch_urls = possible_urls[i:i+4]
-                    print(f"Verificando batch de URLs: {batch_urls}")
-                    
-                    batch_results = verify_urls_parallel(batch_urls, company_name, provincia, codigo_postal, nif)
-                    
-                    # Update scores and data for valid URLs (score >= 60)
-                    for url, data in batch_results.items():
-                        current_score = data.get('score', 0)
-                        if current_score >= 60:
-                            all_valid_urls_data[url] = data
-                            if current_score > max_score:
-                                max_score = current_score
-                                best_url_data = {url: data}
-                                print(f"Nueva mejor URL encontrada: {url} con puntuación: {current_score}")
+                        max_score = data.get('score', 0)
+                        best_url_data = {possible_urls[0]: data}
+                        print(f"URL del Excel validada con puntuación {max_score}. No se generarán URLs adicionales.")
+                    else:
+                        # Solo generar URLs adicionales si la URL del Excel no es válida o tiene puntuación < 60
+                        print(f"URL del Excel no válida o puntuación < 60 ({data.get('score', 0) if data else 'sin datos'}). Generando URLs adicionales.")
+                        additional_urls, _ = generate_possible_urls(company_name, None, provincia)
+                        possible_urls.extend(additional_urls)
+                        
+                        # Process all URLs to find the one with highest score >= 60
+                        for i in range(0, len(possible_urls), 4):  # Process in batches of 4
+                            batch_urls = possible_urls[i:i+4]
+                            print(f"Verificando batch de URLs: {batch_urls}")
+                            
+                            batch_results = verify_urls_parallel(batch_urls, company_name, provincia, codigo_postal, nif)
+                            
+                            # Update scores and data for valid URLs (score >= 60)
+                            for url, data in batch_results.items():
+                                current_score = data.get('score', 0)
+                                if current_score >= 60:
+                                    all_valid_urls_data[url] = data
+                                    if current_score > max_score:
+                                        max_score = current_score
+                                        best_url_data = {url: data}
+                                        print(f"Nueva mejor URL encontrada: {url} con puntuación: {current_score}")
+                else:
+                    # Si no hay URL en el Excel, procesar todas las generadas
+                    # Process all URLs to find the one with highest score >= 60
+                    for i in range(0, len(possible_urls), 4):  # Process in batches of 4
+                        batch_urls = possible_urls[i:i+4]
+                        print(f"Verificando batch de URLs: {batch_urls}")
+                        
+                        batch_results = verify_urls_parallel(batch_urls, company_name, provincia, codigo_postal, nif)
+                        
+                        # Update scores and data for valid URLs (score >= 60)
+                        for url, data in batch_results.items():
+                            current_score = data.get('score', 0)
+                            if current_score >= 60:
+                                all_valid_urls_data[url] = data
+                                if current_score > max_score:
+                                    max_score = current_score
+                                    best_url_data = {url: data}
+                                    print(f"Nueva mejor URL encontrada: {url} con puntuación: {current_score}")
                 
                 # Use the best scoring URL's data
                 if best_url_data:
@@ -843,14 +884,16 @@ def process_excel(file_path, url_column='URL', provincia_column='NOM_PROVINCIA',
                     
         except KeyboardInterrupt:
             print("\nGuardando progreso antes de salir...")
-            output_file = os.path.splitext(file_path)[0] + '_procesado3.xlsx'
+            output_file = os.path.splitext(file_path)[0] + '_procesado_interrumpido.xlsx'
             df.to_excel(output_file, index=False, engine='openpyxl')
-            sys.exit(0)
+            print(f"Progreso guardado en {output_file}")
+            # Forzar la salida después de guardar
+            os._exit(0)
         except Exception as e:
             print(f"Error procesando empresa {idx + 1}: {str(e)}")
             continue
     
-    output_file = os.path.splitext(file_path)[0] + '_procesado_20feb.xlsx'
+    output_file = os.path.splitext(file_path)[0] + '_procesado_21feb.xlsx'
     try:
         df.to_excel(output_file, index=False, engine='openpyxl')
         return output_file
