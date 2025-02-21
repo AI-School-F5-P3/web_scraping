@@ -463,7 +463,7 @@ def verify_company_url(url, company_name, session, provincia=None, codigo_postal
         if codigo_postal_found:
             score += 20
         if nif_found:
-            score += 40
+            score += 100
         
         data['score'] = score
         print(f"Puntuación de verificación para {url}: {score}")
@@ -559,10 +559,10 @@ def generate_possible_urls(company_name, excel_url=None, provincia=None):
         
         # Add combinations with 'grupo' and 'group' prefixes
         word_combinations.add('grupo' + base_combination)
-        word_combinations.add('group' + base_combination)
+        
         
         # Add combinations with 'grupo' and 'group' suffixes
-        word_combinations.add(base_combination + 'grupo')
+        
         word_combinations.add(base_combination + 'group')
         
         # If we have remaining words, try combinations with them
@@ -574,14 +574,14 @@ def generate_possible_urls(company_name, excel_url=None, provincia=None):
                 
                 # Prefix variations with next word
                 word_combinations.add('grupo' + base_combination + next_word)
-                word_combinations.add('group' + base_combination + next_word)
+                
                 
                 # Suffix variations with next word
-                word_combinations.add(base_combination + next_word + 'grupo')
+                
                 word_combinations.add(base_combination + next_word + 'group')
 
     # INSERTAR AQUÍ: Crear un segundo conjunto de variaciones eliminando la primera palabra
-    if len(words) > 1 and words[0] not in ['grupo', 'group']:
+    if len(words) > 1 and words[0] not in ['grupo']:
         # Obtener palabras sin la primera
         words_without_first = words[1:]
         secondary_combinations = set()
