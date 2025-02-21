@@ -264,7 +264,7 @@ class EnterpriseApp:
             self.render_analysis()
 
     def handle_file_upload(self, file):
-        """Procesa la carga de archivos"""
+        """Procesa la carga de archivos y actualiza la BD, ignorando duplicados silenciosamente"""
         try:
             with st.spinner("Procesando archivo..."):
                 # Leer archivo
@@ -273,8 +273,6 @@ class EnterpriseApp:
                 else:
                     df = pd.read_excel(file, header=0)
                     
-                #st.write("Columnas detectadas:", df.columns.tolist())
-                
                 # Validar columnas
                 missing_cols = [col for col in REQUIRED_COLUMNS if col not in df.columns]
                 if missing_cols:
@@ -284,35 +282,56 @@ class EnterpriseApp:
                 # Normalizar nombres de columnas
                 df.columns = [col.strip().lower() for col in df.columns]
 
+                # Obtener registros existentes para comparación
+                existing_records = self.db.execute_query(
+                    "SELECT cod_infotel FROM sociedades WHERE deleted = FALSE",
+                    return_df=True
+                )
+                
+                if existing_records is not None and not existing_records.empty:
+                    existing_codes = set(existing_records['cod_infotel'].values)
+                    
+                    # Filtrar solo los registros que no existen en la BD
+                    df = df[~df['cod_infotel'].isin(existing_codes)]
+                    
+                    if len(df) == 0:
+                        st.info("No hay nuevos registros para procesar. Todos los registros ya existen en la base de datos.")
+                        return
+
                 # Limpiar datos antes de guardar
-                df = df.replace(r'^\s*$', None, regex=True)  # Convertir strings vacíos y espacios en blanco a None
-                df = df.replace({np.nan: None})  # Convertir NaN a None
+                df = df.replace(r'^\s*$', None, regex=True)
+                df = df.replace({np.nan: None})
                 
-                # Guardar en base de datos sin batch_id ni created_by
-                result = self.db.save_batch(df, check_duplicates=True)  # Add a parameter to check duplicates
-                
-                #st.write("Resultado de save_batch:", result)
+                # Guardar en base de datos
+                result = self.db.save_batch(df, check_duplicates=True)
                 
                 if result["status"] == "success":
-                    st.session_state.current_batch = {
-                        "data": df,
-                        "total_records": len(df),
-                        "timestamp": datetime.now()
-                    }
-                    st.success(f"✅ Archivo procesado exitosamente: {result['inserted']} registros")
+                    st.success(f"✅ Archivo procesado exitosamente: {result['inserted']} nuevos registros añadidos")
+                    # Recargar datos de la BD para actualizar el dashboard
+                    self.load_data_from_db()
+                elif result["status"] == "partial":
+                    st.warning(
+                        f"⚠️ Procesamiento parcial: {result['inserted']}/{result['total']} registros. "
+                        f"Errores: {'; '.join(result['errors'])}"
+                    )
                 else:
-                    st.error(f"❌ Error al procesar archivo: {result['message']}")
-                
+                    st.error(f"❌ Error al procesar archivo: {result['message']}\nDetalles: {result['errors']}")
+                    
         except Exception as e:
-            st.error(f"❌ Error al procesar archivo: {str(e)}")
+            import traceback
+            error_details = traceback.format_exc()
+            st.error(f"❌ Error al procesar archivo: {str(e)}\n\nDetalles:\n{error_details}")
 
     def render_dashboard(self):
-        """Renderiza el dashboard con diseño mejorado"""
-        if not st.session_state.current_batch:
-            st.info("👆 Carga un archivo para ver las estadísticas")
+        """Renderiza el dashboard con datos de la BD"""
+        # Obtener datos actualizados de la BD
+        df = self.db.execute_query("SELECT * FROM sociedades WHERE deleted = FALSE", return_df=True)
+        
+        if df is None or df.empty:
+            st.info("👆 No hay datos en la base de datos. Carga un archivo para ver las estadísticas")
             return
 
-        df = st.session_state.current_batch["data"]
+        # Normalizar nombres de columnas
         df.columns = df.columns.str.strip().str.lower()
         
         # Enhanced metrics display
@@ -323,22 +342,17 @@ class EnterpriseApp:
         with col1:
             st.metric(
                 "Total Registros",
-                f"{st.session_state.current_batch['total_records']:,}",
+                f"{len(df):,}",
                 delta=None,
             )
         
-        valid_url_series = df['url'].apply(
-            lambda x: isinstance(x, str) and x.strip() != '' and 
-                    (x.strip().lower().startswith("http://") or 
-                    x.strip().lower().startswith("https://") or 
-                    x.strip().lower().startswith("www."))
-        )
-        total_with_web = valid_url_series.sum()
+        # Contar URLs válidas (existentes y accesibles)
+        total_with_web = df['url_exists'].sum() if 'url_exists' in df.columns else 0
         with col2:
             st.metric(
-                "Con Web",
+                "Con Web Activa",
                 f"{total_with_web:,}",
-                delta=f"{(total_with_web/len(df)*100):.1f}%"
+                delta=f"{(total_with_web/len(df)*100):.1f}%" if len(df) > 0 else None
             )
         
         unique_provinces = df['nom_provincia'].nunique()
@@ -349,10 +363,12 @@ class EnterpriseApp:
                 delta=None
             )
         
+        # Obtener la fecha de última actualización de la BD
+        last_update = df['fecha_actualizacion'].max() if 'fecha_actualizacion' in df.columns else None
         with col4:
             st.metric(
                 "Última actualización",
-                st.session_state.current_batch['timestamp'].strftime("%d-%m-%Y")
+                last_update.strftime("%d-%m-%Y") if last_update else "No disponible"
             )
         
         # Enhanced charts section
@@ -664,21 +680,16 @@ class EnterpriseApp:
             st.info("No hay datos de contacto disponibles.")
             
     def render_url_status_chart(self, df):
-        """Renderiza el gráfico de estado de URLs con mejor diseño"""
-        valid_url_series = df['url'].apply(
-            lambda x: isinstance(x, str) and x.strip() != '' and 
-                    (x.strip().lower().startswith("http://") or 
-                    x.strip().lower().startswith("https://") or 
-                    x.strip().lower().startswith("www."))
-        )
-        count_valid = valid_url_series.sum()
-        count_invalid = len(valid_url_series) - count_valid
+        """Renderiza el gráfico de estado de URLs usando datos de la BD"""
+        # Usar el campo url_exists de la BD
+        count_valid = df['url_exists'].sum() if 'url_exists' in df.columns else 0
+        count_invalid = len(df) - count_valid
 
         # Configurar los datos del gráfico
         counts = [count_valid, count_invalid]
         labels = [
-            f"Con URL\n({count_valid:,})",
-            f"Sin URL\n({count_invalid:,})"
+            f"URLs Activas\n({count_valid:,})",
+            f"URLs Inactivas\n({count_invalid:,})"
         ]
         colors = ['#3498db', '#e74c3c']
 

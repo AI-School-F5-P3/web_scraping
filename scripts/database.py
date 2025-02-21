@@ -258,6 +258,10 @@ class DatabaseManager:
             fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             deleted BOOLEAN DEFAULT FALSE
         );
+
+        -- Crear índice único si no existe
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sociedades_cod_infotel 
+        ON sociedades(cod_infotel);
         """
         try:
             self.execute_query(create_table_query, return_df=False)
