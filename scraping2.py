@@ -20,6 +20,7 @@ import time
 import sys
 import signal
 import socket
+import threading
 
 # Desactivar advertencias de SSL
 urllib3.disable_warnings(InsecureRequestWarning)
