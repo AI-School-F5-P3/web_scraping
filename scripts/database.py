@@ -2,18 +2,19 @@
 
 import psycopg2
 import pandas as pd
+import numpy as np
 from typing import Optional, List, Dict, Any
 from psycopg2.extras import execute_values
 from config import DB_CONFIG, HARDWARE_CONFIG, TIMEOUT_CONFIG
 import platform
-
+from db_validator import DataProcessor
 class DatabaseManager:
     def __init__(self):
         self.connection = psycopg2.connect(**DB_CONFIG)
         self.connection.autocommit = True
+        self.data_processor = DataProcessor()
         self._optimize_connection()
         self.create_table_if_not_exists()
-        pass
 
     def _optimize_connection(self):
         with self.connection.cursor() as cursor:
@@ -107,6 +108,11 @@ class DatabaseManager:
         errors = []
 
         try:
+            # Convertir strings vacíos y espacios en blanco a None/NULL
+            df = df.replace(r'^\s*$', None, regex=True)
+            # Convertir NaN a None
+            df = df.replace({np.nan: None})
+            
             df_chunks = [df[i:i + chunk_size] for i in range(0, len(df), chunk_size)]
             
             with self.connection.cursor() as cursor:
@@ -130,9 +136,28 @@ class DatabaseManager:
             return {"status": "error", "message": str(e), "errors": errors}
 
     def save_batch(self, df: pd.DataFrame, check_duplicates: bool = False) -> Dict[str, Any]:
+        # Limpiar strings vacíos y espacios en blanco antes del procesamiento
+        df = df.replace(r'^\s*$', None, regex=True)
+        df = df.replace({np.nan: None})
+        
+        # Asegurar limpieza de espacios en blanco antes de guardar
+        df = self.data_processor.validator.clean_text_fields(df)
+        df['nom_provincia'] = df['nom_provincia'].astype(str).str.strip()    
+        
+        # Procesar y validar datos
+        df, errors = self.data_processor.process_dataframe(df)
+
+        if errors:
+            return {
+                "status": "error",
+                "message": "Errores de validación",
+                "errors": errors
+            }
+            
         insert_columns = [
             'cod_infotel', 'nif', 'razon_social', 'domicilio', 'cod_postal',
-            'nom_poblacion', 'nom_provincia', 'url'
+            'nom_poblacion', 'nom_provincia', 'url', 'url_exists', 'url_limpia',
+            'url_status'
         ]
         
         if check_duplicates:

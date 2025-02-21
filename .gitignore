@@ -32,3 +32,6 @@ virtualenv/
 scraping_313/ 
 
 # Archivos no necesarios por el momento (mismo proyecto en varias fases)
+# Archivos no necesarios por el momento (mismo proyecto en varias fases)
+_pycache_
+*.pyc

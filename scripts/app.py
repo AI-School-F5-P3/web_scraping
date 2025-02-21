@@ -2,6 +2,7 @@
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 from datetime import datetime
 import time
 from agents import DBAgent, ScrapingAgent  # Removed OrchestratorAgent
@@ -21,7 +22,9 @@ class EnterpriseApp:
         self.scraper = ProWebScraper()
         self.setup_agents()
         self.load_data_from_db()
-        
+        # Cargar datos de la BD si no hay nada en session_state
+        self.load_data_from_db()    
+            
         # Enhanced page configuration
         st.set_page_config(
             page_title="Sistema Empresarial de Análisis",
@@ -134,6 +137,10 @@ class EnterpriseApp:
             if df is not None and not df.empty:
                 # Normalizar nombres de columnas a minúsculas
                 df.columns = df.columns.str.strip().str.lower()
+                
+                # Asegurar limpieza de espacios en blanco
+                df['nom_provincia'] = df['nom_provincia'].astype(str).str.strip()
+                
                 # Check for duplicates by a unique identifier (e.g., NIF or cod_infotel)
                 if 'cod_infotel' in df.columns:
                     df = df.drop_duplicates(subset=['cod_infotel'], keep='first')
@@ -228,6 +235,7 @@ class EnterpriseApp:
                     self.apply_filters(selected_provincia, has_web, has_ecommerce)
             
             # Database Reset Button
+            # Database Reset Button
             if st.button("Borrar BBDD", help="Reinicia la base de datos"):
                 self.db.reset_database()
                 st.session_state.current_batch = None
@@ -265,7 +273,7 @@ class EnterpriseApp:
                 else:
                     df = pd.read_excel(file, header=0)
                     
-                st.write("Columnas detectadas:", df.columns.tolist())
+                #st.write("Columnas detectadas:", df.columns.tolist())
                 
                 # Validar columnas
                 missing_cols = [col for col in REQUIRED_COLUMNS if col not in df.columns]
@@ -275,11 +283,15 @@ class EnterpriseApp:
                 
                 # Normalizar nombres de columnas
                 df.columns = [col.strip().lower() for col in df.columns]
+
+                # Limpiar datos antes de guardar
+                df = df.replace(r'^\s*$', None, regex=True)  # Convertir strings vacíos y espacios en blanco a None
+                df = df.replace({np.nan: None})  # Convertir NaN a None
                 
                 # Guardar en base de datos sin batch_id ni created_by
                 result = self.db.save_batch(df, check_duplicates=True)  # Add a parameter to check duplicates
                 
-                st.write("Resultado de save_batch:", result)
+                #st.write("Resultado de save_batch:", result)
                 
                 if result["status"] == "success":
                     st.session_state.current_batch = {
@@ -301,6 +313,7 @@ class EnterpriseApp:
             return
 
         df = st.session_state.current_batch["data"]
+        df.columns = df.columns.str.strip().str.lower()
         
         # Enhanced metrics display
         st.markdown("### 📊 Estadísticas Generales")
