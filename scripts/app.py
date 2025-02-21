@@ -8,7 +8,7 @@ import time
 from agents import DBAgent, ScrapingAgent  # Removed OrchestratorAgent
 from database import DatabaseManager
 from scraping import ProWebScraper
-from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA, LLM_MODELS
+from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA, SQL_MODELS, SCRAPING_MODELS
 from agents import CustomLLM
 import matplotlib.pyplot as plt
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -126,9 +126,9 @@ class EnterpriseApp:
             st.session_state.show_sql = False
         # Initialize with default models from config
         if "sql_model" not in st.session_state:
-            st.session_state.sql_model = LLM_MODELS["base_datos"]
+            st.session_state.sql_model = list(SQL_MODELS.keys())[0]
         if "scraping_model" not in st.session_state:
-            st.session_state.scraping_model = LLM_MODELS["scraping"]
+            st.session_state.scraping_model = list(SCRAPING_MODELS.keys())[0]
             
     def load_data_from_db(self):
         """Si no hay datos en sesión, se cargan desde la BD"""
@@ -154,12 +154,14 @@ class EnterpriseApp:
     def setup_agents(self):
         """Configuración de agentes inteligentes teniendo en cuenta el modelo seleccionado"""
         try:
-            # Create new instances of agents with selected models
+            # Crear nuevas instancias de agentes con los modelos seleccionados
             self.db_agent = DBAgent()
-            self.db_agent.llm = CustomLLM(st.session_state.sql_model, provider="groq")
+            modelo_sql = SQL_MODELS.get(st.session_state.sql_model, st.session_state.sql_model)
+            self.db_agent.llm = CustomLLM(modelo_sql, provider="groq")
             
             self.scraping_agent = ScrapingAgent()
-            self.scraping_agent.llm = CustomLLM(st.session_state.scraping_model)
+            modelo_scraping = SCRAPING_MODELS.get(st.session_state.scraping_model, st.session_state.scraping_model)
+            self.scraping_agent.llm = CustomLLM(modelo_scraping, provider="groq")
         except Exception as e:
             st.error(f"Error al configurar agentes: {str(e)}")
 
@@ -171,28 +173,24 @@ class EnterpriseApp:
             # Model Selection Section
             st.subheader("🤖 Configuración de Modelos")
             
-            # SQL model selection (only Groq model for database queries)
-            sql_models = {
-                "Base de datos (Groq)": LLM_MODELS["base_datos"]
-            }
+            # Diccionario de modelos SQL
+            sql_models = SQL_MODELS
             
             selected_sql_model = st.selectbox(
                 "Modelo para Consultas SQL",
                 list(sql_models.keys()),
-                index=0,  # Only one option available
-                help="Modelo Groq para consultas SQL"
+                index=0,
+                help="Selecciona el modelo Groq para consultas SQL"
             )
             
             # Scraping model selection
-            scraping_models = {
-                "Web Scraping": LLM_MODELS["scraping"]
-            }
+            scraping_models = SCRAPING_MODELS
             
             selected_scraping_model = st.selectbox(
                 "Modelo para Web Scraping",
                 list(scraping_models.keys()),
-                index=0,  # Only one option available
-                help="Modelo para análisis de web scraping"
+                index=0,
+                help="Selecciona el modelo para análisis de web scraping"
             )
             
             # Update models if changed
@@ -203,11 +201,6 @@ class EnterpriseApp:
             if selected_scraping_model != st.session_state.scraping_model:
                 st.session_state.scraping_model = selected_scraping_model
                 self.setup_agents()
-                
-            # Display current models (for debugging/verification)
-            with st.expander("Modelos actuales"):
-                st.write(f"SQL: {st.session_state.sql_model}")
-                st.write(f"Scraping: {st.session_state.scraping_model}")
             
             # File Upload Section
             st.subheader("📤 Carga de Datos")
@@ -466,13 +459,13 @@ class EnterpriseApp:
         if st.button("Generar Análisis"):
             self.generate_analysis(analysis_type)
             
-    def remove_accents(text):
+    def remove_accents(self, text):
         """Elimina acentos de una cadena de texto."""
         return ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
 
-    def is_count_query(query):
+    def is_count_query(self, query):
         """Detecta si la consulta del usuario es una consulta de conteo."""
-        query_normalized = remove_accents(query.lower())
+        query_normalized = self.remove_accents(query.lower())
 
         # Patrón para detectar frases relacionadas con conteo
         count_patterns = [
@@ -485,59 +478,40 @@ class EnterpriseApp:
         return any(re.search(pattern, query_normalized) for pattern in count_patterns)
 
     def process_query(self, query: str):
-        """Procesa consultas en lenguaje natural usando DBAgent para generar SQL"""
-        if not query:
-            st.warning("Por favor, introduce una consulta")
-            return
-            
         try:
             with st.spinner("Procesando consulta..."):
-                # Generate the SQL query
+                # Generate query
                 query_info = self.db_agent.generate_query(query)
                 
-                # Validate query_info
-                if not query_info or not isinstance(query_info, dict):
-                    st.error("El agente no generó una consulta válida")
+                # Check for errors
+                if query_info.get("error"):
+                    st.error(query_info["error"])
                     return
                     
-                sql_query = query_info.get("query")
-                if not sql_query:
-                    st.error("No se pudo generar una consulta SQL válida")
-                    return
+                # Execute query
+                results = self.db.execute_query(query_info["query"], return_df=True)
                 
-                # Print the SQL query for debugging
-                print(f"Executing SQL query: {sql_query}")
+                # Handle different query types
+                if query_info["query_type"] == "count":
+                    value = results.iloc[0, 0]
+                    st.metric("Total", f"{value:,}")
+                elif query_info["query_type"] == "aggregate":
+                    st.dataframe(results)
+                    # Add visualization if needed
+                else:
+                    st.dataframe(results)
                 
-                # Execute the query
-                results = self.db.execute_query(sql_query, return_df=True)
-                
-                # Handle query results
-                if results is None:
-                    st.info("La consulta no generó resultados")
-                    return
-                
-                # Format results for count queries
-                if isinstance(results, pd.DataFrame):
-                    if len(results.columns) == 1 and (
-                        results.columns[0].lower() in ['count', 'total'] or 
-                        'count' in results.columns[0].lower()
-                    ):
-                        value = results.iloc[0, 0]
-                        st.metric("Total", f"{value:,}")
-                    else:
-                        st.dataframe(results)
-                
-                # Store query info in session state
-                st.session_state.last_query = {
-                    "sql": sql_query,
-                    "results": results,
-                    "explanation": query_info.get("explanation", "")
-                }
-                
+                # Show SQL if requested
+                if st.session_state.show_sql:
+                    st.code(query_info["query"], language="sql")
+                    
+                # Show explanation
+                if query_info["explanation"]:
+                    with st.expander("Explicación"):
+                        st.write(query_info["explanation"])
+                        
         except Exception as e:
             st.error(f"Error al procesar consulta: {str(e)}")
-            import traceback
-            print(f"Query processing error: {traceback.format_exc()}")
 
     def process_scraping(self, limit: int):
         """Procesa el scraping de URLs utilizando procesamiento paralelo y muestra detalles."""

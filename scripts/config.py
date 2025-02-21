@@ -5,6 +5,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Add LangSmith configurations
+LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
+LANGSMITH_PROJECT = "enterprise-analysis"
+LANGSMITH_TRACE_ALL = True
+
 # Configuración de Base de Datos
 DB_CONFIG = {
     "host": os.getenv("DB_HOST", "localhost"),
@@ -45,9 +50,6 @@ PROVINCIAS_ESPANA = [
     'Vizcaya', 'Zamora', 'Zaragoza'
 ]
 
-# Configuración de Ollama (if you still use it for some tasks)
-OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
-
 # Configuración de Groq
 # Add the Groq API key here and update the model for database queries.
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -55,13 +57,20 @@ if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY not found in environment variables")
 # Dado que la librería de Groq gestiona internamente el endpoint, no es necesario especificarlo.
 
-# Configuración de Ollama
-OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
-LLM_MODELS = {
-    # For querying the database, use the desired Groq model:
-    "base_datos": "deepseek-r1-distill-llama-70b",
-    # For scraping tasks, we can keep the existing model or update as needed:
-    "scraping": "qwen-2.5-32b"
+# Modelos para consultas SQL (Groq)
+SQL_MODELS = {
+    "deepseek-r1": "deepseek-r1-distill-llama-70b",
+    "gemma2": "gemma2-9b-it",
+    "llama-3.3": "llama-3.3-70b-versatile",
+    "qwen-2.5": "qwen-2.5-32b",
+}
+
+# Modelos para web scraping
+SCRAPING_MODELS = {
+    "qwen-2.5": "qwen-2.5-32b",
+    "gemma2": "gemma2-9b-it",
+    "llama-3.3": "llama-3.3-70b-versatile",
+    "deepseek-r1": "deepseek-r1-distill-llama-70b"
 }
 
 # Columnas requeridas para ingesta

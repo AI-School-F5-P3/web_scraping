@@ -6,15 +6,17 @@ from langchain.llms.base import LLM
 from langchain_groq import ChatGroq
 import requests
 import pandas as pd
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
-from config import LLM_MODELS, GROQ_API_KEY, OLLAMA_ENDPOINT, PROVINCIAS_ESPANA, HARDWARE_CONFIG
+from config import GROQ_API_KEY, PROVINCIAS_ESPANA, HARDWARE_CONFIG
 import re
 from scraping import ProWebScraper
 import unicodedata
+from dataclasses import dataclass, field
+from enum import Enum
 
 class CustomLLM(LLM):
-    def __init__(self, model_name: str, provider: str = "ollama"):
+    def __init__(self, model_name: str, provider: str = "groq"):
         super().__init__()
         self.model_name = model_name
         self.temperature = 0.7
@@ -28,38 +30,20 @@ class CustomLLM(LLM):
 
     def _call(self, prompt: str, stop: List[str] = None) -> str:
         try:
-            if self.provider == "groq":
-                response = requests.post(
-                    # Using the Groq library default endpoint if not provided, or rely on the client.
-                    # For our example, we assume the client library uses GROQ_API_KEY internally.
-                    # If you need to call a specific endpoint, you could add that logic here.
-                    # We'll assume the Groq library handles it.
-                    # For illustration, we simply send the API key in the payload.
-                    "https://api.groq.cloud/generate",
-                    json={
-                        "model": self.model_name,
-                        "prompt": prompt,
-                        "temperature": self.temperature,
-                        "max_tokens": self.max_tokens,
-                        "stream": False,
-                        **self.gpu_config,
-                        "api_key": GROQ_API_KEY
-                    },
-                    timeout=30
-                )
-            else:
-                response = requests.post(
-                    OLLAMA_ENDPOINT,
-                    json={
-                        "model": self.model_name,
-                        "prompt": prompt,
-                        "temperature": self.temperature,
-                        "max_tokens": self.max_tokens,
-                        "stream": False,
-                        **self.gpu_config
-                    },
-                    timeout=30
-                )
+            # Solo se usa Groq
+            response = requests.post(
+                "https://api.groq.cloud/generate",
+                json={
+                    "model": self.model_name,
+                    "prompt": prompt,
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens,
+                    "stream": False,
+                    **self.gpu_config,
+                    "api_key": GROQ_API_KEY
+                },
+                timeout=30
+            )
             return response.json().get('response', '')
         except Exception as e:
             return f"Error: {str(e)}"
@@ -69,121 +53,304 @@ class CustomLLM(LLM):
 
     @property
     def _llm_type(self) -> str:
-        return "custom_groq" if self.provider == "groq" else "custom_ollama"
+        return "custom_groq"
     
     class Config:
         extra = "allow"
 
+class QueryType(Enum):
+    COUNT = "count"
+    TABLE = "table"
+    AGGREGATE = "aggregate"
+    NON_DB = "non_db"
+
+@dataclass
+class QueryContext:
+    """Stores context about the query being processed"""
+    query_type: QueryType = QueryType.TABLE
+    has_url_filter: bool = False
+    has_ecommerce_filter: bool = False
+    has_social_filter: bool = False
+    province: Optional[str] = None
+    limit: int = 10
+    specified_columns: List[str] = field(default_factory=list)
+
 class DBAgent:
-    PROMPT = """Eres un Arquitecto SQL Senior especializado en análisis empresarial español. Genera SQL válido o respuestas en lenguaje natural (español) según corresponda.
-    
-# Reglas:
-1. **Columnas permitidas:**
-   - cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3.
-2. **Seguridad:** Solo genera SELECT. Nunca INSERT, UPDATE o DELETE.
-3. **Límites:** Si la consulta no especifica un límite, añade 'LIMIT 10' por defecto.
-4. **Geografía:** Si la consulta menciona una ubicación sin especificar si es ciudad o provincia, asume que es provincia (nom_provincia) a menos que se indique lo contrario.
-5. **Normalización:**
-   - Corrige errores ortográficos en nombres de provincias (ej. 'barclona' → 'barcelona').
-   - Elimina acentos para evitar fallos en ILIKE.
-   - Usa ILIKE para todas las comparaciones de texto.
-6. **Formato SQL:**
-   - Usa mayúsculas para keywords SQL (SELECT, WHERE, etc.).
-   - Usa alias descriptivos (ej. 'total' para COUNT(*)).
-7. **Consultas ambiguas o erróneas:**
-   - Si la petición es ambigua, está mal formulada o requiere suposiciones, responde en lenguaje natural solicitando clarificación.
-   - Si la consulta menciona columnas, tablas o funciones no admitidas, responde: "No puedo ayudarte con esa información. Las columnas disponibles son: [listar_columnas]".
-8. **Criterios de filtro:**
-   - Si la consulta no especifica ningún criterio, omite la cláusula WHERE.
-   - Si no hay suficientes datos para generar SQL, responde en español: "No encuentro datos para tu consulta. ¿Podrías reformularla?".
-9. **Consulta de agregación:** Para consultas de conteo, utiliza COUNT(*) y no añade LIMIT.
+    ALLOWED_COLUMNS = [
+        'cod_infotel', 'nif', 'razon_social', 'domicilio', 'cod_postal',
+        'nom_poblacion', 'nom_provincia', 'url', 'e_commerce',
+        'telefono_1', 'telefono_2', 'telefono_3'
+    ]
 
-# Ejemplos de consultas de filas:
-- "Dame las 10 primeras empresas de Madrid" →
-  ```sql
-  SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3 
-  FROM sociedades 
-  WHERE nom_provincia ILIKE '%madrid%'
-  LIMIT 10;
-  ```
-- "Empresas en Málaga con e-commerce activo" →
-  ```sql
-  SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3 
-  FROM sociedades 
-  WHERE nom_provincia ILIKE '%malaga%' AND e_commerce = true 
-  LIMIT 10;
-  ```
+    # Keywords that indicate a query is not database-related
+    NON_DB_KEYWORDS = [
+        'tiempo', 'clima', 'temperatura', 'pronóstico',
+        'hora', 'fecha', 'noticias', 'tráfico'
+    ]
 
-# Ejemplos de consultas agregadas:
-- "¿Cuántas empresas hay en Barcelona?" →
-  ```sql
-  SELECT COUNT(*) AS total FROM sociedades WHERE nom_provincia ILIKE '%barcelona%';
-  ```
-- "¿Cuántas tiendas online hay en Valencia?" →
-  ```sql
-  SELECT COUNT(*) AS total FROM sociedades WHERE nom_provincia ILIKE '%valencia%' AND e_commerce = true;
-  ```
+    # Social media related keywords
+    SOCIAL_KEYWORDS = [
+        'youtube', 'linkedin', 'facebook', 'twitter', 
+        'instagram', 'tiktok', 'redes sociales'
+    ]
 
-# Respuestas en lenguaje natural:
-- Si la petición es ambigua: "¿Podrías especificar la provincia o ciudad?".
-- Si se piden datos no disponibles: "No tengo información sobre esa columna. Las columnas disponibles son: cod_infotel, nif, razon_social, domicilio, cod_postal, nom_poblacion, nom_provincia, url, e_commerce, telefono_1, telefono_2, telefono_3.".
-- Si no se puede generar SQL: "No encuentro datos para tu consulta. ¿Podrías reformularla?".
+    PROMPT = """Eres un Arquitecto SQL Senior especializado en análisis empresarial. Tu tarea es generar consultas SQL precisas para la base de datos 'guardarail' o identificar cuando una consulta no está relacionada con la base de datos.
+
+INPUT: Consulta en lenguaje natural
+OUTPUT: JSON con la siguiente estructura:
+{
+    "query": "SQL query",
+    "explanation": "Explicación de la consulta",
+    "query_type": "count|table|aggregate|non_db",
+    "error": "Mensaje de error si aplica"
+}
+
+REGLAS IMPORTANTES:
+1. Si la consulta no está relacionada con empresas o la base de datos (ej: tiempo, noticias):
+   - Establecer query_type: "non_db"
+   - Establecer error: "Esta consulta no está relacionada con la base de datos de empresas"
+
+2. Para consultas de proporción/porcentaje:
+   - Usar query_type: "aggregate"
+   - Generar consulta WITH para calcular porcentajes
+
+3. Para consultas sobre redes sociales:
+   - Indicar que esta información no está disponible actualmente
+   - Sugerir consultar datos disponibles (URL, e-commerce)
+
+EJEMPLOS DE MANEJO DE CASOS ESPECIALES:
+
+1. Consulta no relacionada:
+Input: "¿Cuál es el tiempo en Madrid?"
+Output: {
+    "query": null,
+    "explanation": "Esta consulta es sobre el clima y no sobre la base de datos de empresas",
+    "query_type": "non_db",
+    "error": "Esta consulta no está relacionada con la base de datos de empresas"
+}
+
+2. Consulta de proporción:
+Input: "¿Qué proporción de empresas de Madrid tienen URL?"
+Output: {
+    "query": "WITH total AS (SELECT COUNT(*) AS total_count FROM sociedades WHERE nom_provincia ILIKE '%madrid%') SELECT COUNT(*) AS url_count, ROUND(COUNT(*) * 100.0 / total.total_count, 2) AS percentage FROM sociedades, total WHERE nom_provincia ILIKE '%madrid%' AND url IS NOT NULL AND LENGTH(TRIM(url)) > 0 AND (url ILIKE 'http%' OR url ILIKE 'www.%')",
+    "explanation": "Cálculo del porcentaje de empresas en Madrid que tienen URL válida",
+    "query_type": "aggregate"
+}
+
+3. Consulta de redes sociales:
+Input: "Dame las empresas de Barcelona con YouTube"
+Output: {
+    "query": null,
+    "explanation": "Actualmente no disponemos de información sobre redes sociales. Solo tenemos datos de URL y e-commerce",
+    "query_type": "non_db",
+    "error": "Información de redes sociales no disponible"
+}
 """
 
     def __init__(self):
-        # Use Groq for querying the database
-        self.llm = CustomLLM(LLM_MODELS["base_datos"], provider="groq")
+        self.llm = None
+
+    def analyze_query(self, query: str) -> QueryContext:
+        """Analyzes the natural language query to extract key information"""
+        query_normalized = self.remove_accents(query.lower())
+        ctx = QueryContext()
+
+        # Check if query is non-database related
+        if any(keyword in query_normalized for keyword in self.NON_DB_KEYWORDS):
+            ctx.query_type = QueryType.NON_DB
+            return ctx
+
+        # Check if query involves social media
+        if any(keyword in query_normalized for keyword in self.SOCIAL_KEYWORDS):
+            ctx.query_type = QueryType.NON_DB
+            return ctx
+
+        # Detect query type
+        if any(word in query_normalized for word in [
+            "proporcion", "porcentaje", "ratio", "comparacion"
+        ]):
+            ctx.query_type = QueryType.AGGREGATE
+        elif any(word in query_normalized for word in [
+            "cuantas", "cuantos", "numero de", "total de", "cuenta"
+        ]):
+            ctx.query_type = QueryType.COUNT
+
+        # Extract filters
+        ctx.has_url_filter = any(term in query_normalized for term in [
+            "con web", "tienen web", "con url", "tienen url"
+        ])
+        ctx.has_ecommerce_filter = any(term in query_normalized for term in [
+            "e-commerce", "ecommerce", "tienda online"
+        ])
+
+        # Extract province
+        for province in self.get_provinces():
+            if province.lower() in query_normalized:
+                ctx.province = province
+                break
+
+        # Extract limit
+        match = re.search(r'\b(\d+)\b', query)
+        if match:
+            ctx.limit = int(match.group(1))
+
+        return ctx
 
     def generate_query(self, natural_query: str) -> Dict[str, Any]:
-        """Generate SQL query from natural language."""
-        # Normalize the query text
-        query_normalized = self.remove_accents(natural_query.lower())
-        
-        # Check if it's a count query
-        is_count = any(word in query_normalized for word in ["cuantas", "cuantos", "numero de", "total de", "cuenta"])
-        
-        # Extract province name if present
-        provinces = [p.lower() for p in PROVINCIAS_ESPANA]
-        province = next((p for p in provinces if p in query_normalized), None)
-        
-        if is_count and province:
-            # Generate count query with province filter
-            query = f"""
-            SELECT COUNT(*) as total 
+        """Generates SQL query from natural language input"""
+        try:
+            ctx = self.analyze_query(natural_query)
+
+            if ctx.query_type == QueryType.NON_DB:
+                if any(keyword in natural_query.lower() for keyword in self.SOCIAL_KEYWORDS):
+                    return {
+                        "query": None,
+                        "explanation": "Actualmente no disponemos de información sobre redes sociales. Solo tenemos datos de URL y e-commerce.",
+                        "query_type": "non_db",
+                        "error": "Información de redes sociales no disponible"
+                    }
+                return {
+                    "query": None,
+                    "explanation": "Esta consulta no está relacionada con la base de datos de empresas",
+                    "query_type": "non_db",
+                    "error": "Esta consulta no está relacionada con la base de datos de empresas"
+                }
+
+            if ctx.query_type == QueryType.AGGREGATE:
+                return self.generate_aggregate_query(ctx)
+            elif ctx.query_type == QueryType.COUNT:
+                return self.generate_count_query(ctx)
+            else:
+                return self.generate_table_query(ctx)
+
+        except Exception as e:
+            return {
+                "query": None,
+                "explanation": None,
+                "error": str(e),
+                "query_type": "error"
+            }
+
+    def generate_aggregate_query(self, ctx: QueryContext) -> Dict[str, Any]:
+        """Generates aggregate query with percentages"""
+        where_clauses = self.build_where_clauses(ctx)
+        base_where = where_clauses.replace("WHERE ", "") if where_clauses else "TRUE"
+
+        sql = f"""
+        WITH total AS (
+            SELECT COUNT(*) AS total_count 
             FROM sociedades 
-            WHERE LOWER(nom_provincia) LIKE '%{province}%';
-            """
-        elif province:
-            # Generate regular query with province filter
-            query = f"""
-            SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, 
-                nom_poblacion, nom_provincia, url 
-            FROM sociedades 
-            WHERE LOWER(nom_provincia) LIKE '%{province}%'
-            LIMIT {5 if '5' in natural_query else 10};
-            """
-        else:
-            # Default query
-            query = """
-            SELECT cod_infotel, nif, razon_social, domicilio, cod_postal, 
-                nom_poblacion, nom_provincia, url 
-            FROM sociedades 
-            LIMIT 10;
-            """
-        
+            WHERE {base_where}
+        )
+        SELECT 
+            COUNT(*) AS filtered_count,
+            ROUND(COUNT(*) * 100.0 / total.total_count, 2) AS percentage
+        FROM sociedades, total
+        {where_clauses}
+        """
+
         return {
-            "query": query,
-            "explanation": f"Generated SQL query for: {natural_query}"
+            "query": sql.strip(),
+            "explanation": self.generate_explanation(ctx),
+            "query_type": "aggregate",
+            "error": None
+        }
+
+    def generate_count_query(self, ctx: QueryContext) -> Dict[str, Any]:
+        """Generates COUNT query based on context"""
+        where_clauses = self.build_where_clauses(ctx)
+        
+        sql = f"""
+        SELECT COUNT(*) AS total
+        FROM sociedades
+        {where_clauses}
+        """
+
+        return {
+            "query": sql.strip(),
+            "explanation": self.generate_explanation(ctx),
+            "query_type": "count",
+            "error": None
+        }
+
+    def generate_table_query(self, ctx: QueryContext) -> Dict[str, Any]:
+        """Generates table query based on context"""
+        where_clauses = self.build_where_clauses(ctx)
+        
+        columns = ctx.specified_columns or self.ALLOWED_COLUMNS
+        columns_str = ", ".join(columns)
+        
+        sql = f"""
+        SELECT {columns_str}
+        FROM sociedades
+        {where_clauses}
+        LIMIT {ctx.limit}
+        """
+
+        return {
+            "query": sql.strip(),
+            "explanation": self.generate_explanation(ctx),
+            "query_type": "table",
+            "error": None
         }
 
     @staticmethod
     def remove_accents(text: str) -> str:
-        """Remove accents from text."""
-        return ''.join(c for c in unicodedata.normalize('NFD', text) 
-                    if unicodedata.category(c) != 'Mn')
-    
-    def _determine_query_type(self, query: str) -> str:
-        return "default"
+        """Removes accents from text"""
+        return ''.join(c for c in unicodedata.normalize('NFD', text)
+                      if unicodedata.category(c) != 'Mn')
+
+    @staticmethod
+    def get_provinces() -> List[str]:
+        """Returns list of Spanish provinces"""
+        return [
+            "Madrid", "Barcelona", "Valencia", "Sevilla", "Zaragoza",
+            "Málaga", "Murcia", "Palma", "Las Palmas", "Bilbao",
+            # Add more provinces as needed
+        ]
+
+    def build_where_clauses(self, ctx: QueryContext) -> str:
+        """Builds WHERE clause based on query context"""
+        clauses = []
+        
+        if ctx.province:
+            clauses.append(f"nom_provincia ILIKE '%{ctx.province}%'")
+            
+        if ctx.has_url_filter:
+            clauses.extend([
+                "url IS NOT NULL",
+                "LENGTH(TRIM(url)) > 0",
+                "(url ILIKE 'http%' OR url ILIKE 'www.%')"
+            ])
+            
+        if ctx.has_ecommerce_filter:
+            clauses.append("e_commerce = true")
+            
+        if clauses:
+            return "WHERE " + " AND ".join(clauses)
+        return ""
+
+    def generate_explanation(self, ctx: QueryContext) -> str:
+        """Generates human-readable explanation of the query"""
+        parts = []
+        
+        if ctx.query_type == QueryType.COUNT:
+            parts.append("Conteo de empresas")
+        elif ctx.query_type == QueryType.AGGREGATE:
+            parts.append("Cálculo de proporción de empresas")
+        else:
+            parts.append("Listado de empresas")
+            
+        if ctx.province:
+            parts.append(f"en {ctx.province}")
+            
+        if ctx.has_url_filter:
+            parts.append("con URL válida")
+            
+        if ctx.has_ecommerce_filter:
+            parts.append("con e-commerce")
+            
+        return " ".join(parts)
 
 class ScrapingAgent:
     PROMPT = """Eres un Ingeniero de Web Scraping Elite especializado en análisis empresarial. Tu tarea es la siguiente:
@@ -206,7 +373,7 @@ class ScrapingAgent:
 Utiliza un lenguaje claro, conciso y enfocado en la extracción de datos relevantes para análisis empresarial."""
     
     def __init__(self):
-        self.llm = CustomLLM(LLM_MODELS["scraping"])
+        self.llm = None
     
     def plan_scraping(self, url: str) -> dict:
         """
