@@ -26,7 +26,9 @@ HARDWARE_CONFIG = {
     "max_workers": int(os.getenv("MAX_WORKERS", "8")),
     "gpu_enabled": os.getenv("GPU_ENABLED", "True").lower() in ["true", "1"],
     "cuda_visible_devices": os.getenv("CUDA_VISIBLE_DEVICES", "0"),
-    "chrome_options": [
+    "chrome_options": os.getenv("CHROME_OPTIONS", "DEFAULT_CHROME_OPTIONS")
+}
+DEFAULT_CHROME_OPTIONS = [
         "--headless",
         "--no-sandbox",
         "--disable-gpu",
@@ -36,7 +38,6 @@ HARDWARE_CONFIG = {
         "--ignore-certificate-errors",
         "--disable-software-rasterizer"
     ]
-}
 
 # Lista oficial de provincias españolas
 PROVINCIAS_ESPANA = [
