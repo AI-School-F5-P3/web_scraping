@@ -451,28 +451,41 @@ class EnterpriseApp:
                         status_text = st.empty()
                         
                         # Inicializar el servicio de scraping con la configuración de BD
-                        
+                        from scraping_flow import WebScrapingService
                         scraper = WebScrapingService(DB_CONFIG)
                         
-                        # Obtener el número total de empresas a procesar
+                        # Obtener empresas y mostrar información inicial
                         companies = scraper.get_companies_to_process(limit=limit)
                         total_companies = len(companies)
+                        
+                        st.write(f"Encontradas {total_companies} empresas para procesar")
                         
                         if total_companies == 0:
                             st.warning("No hay empresas pendientes de procesar.")
                             return
                             
+                        # Mostrar algunas empresas de ejemplo
+                        st.write("Ejemplos de empresas a procesar:")
+                        for company in companies[:5]:
+                            st.write(f"- {company['razon_social']}: {company['url']}")
+                            
                         processed = 0
                         successful = 0
                         
-                        # Procesar cada empresa y actualizar la barra de progreso
+                        # Procesar cada empresa
                         for company in companies:
                             try:
                                 status_text.text(f"Procesando: {company['razon_social']}")
                                 
-                                result = scraper.process_company(company)
-                                if result.get('url_exists'):
+                                # Verificar la URL
+                                url = company['url']
+                                is_valid, data = scraper.verify_company_url(url, company)
+                                
+                                if is_valid:
                                     successful += 1
+                                    st.write(f"✅ URL válida encontrada para {company['razon_social']}")
+                                else:
+                                    st.write(f"❌ URL no válida para {company['razon_social']}")
                                     
                                 processed += 1
                                 progress_bar.progress(processed / total_companies)
