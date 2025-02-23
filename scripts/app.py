@@ -8,13 +8,14 @@ import time
 from agents import DBAgent, ScrapingAgent  # Removed OrchestratorAgent
 from database import DatabaseManager
 from scraping import ProWebScraper
-from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA, SQL_MODELS, SCRAPING_MODELS
+from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA, SQL_MODELS, SCRAPING_MODELS, DB_CONFIG
 from agents import CustomLLM
 import matplotlib.pyplot as plt
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 import unicodedata
 import subprocess
+from scraping_flow import WebScrapingService
 class EnterpriseApp:
     def __init__(self):
         self.init_session_state()
@@ -444,9 +445,62 @@ class EnterpriseApp:
                     self.process_scraping(limit)  # Mantiene la lógica existente
                     st.success("Scraping con scrapy-Jhon completado.")
                 elif scraping_option == "Scrapy con scrapy-AngelS":
-                    st.info("Ejecutando scraping1.py...")
-                    subprocess.run(["python", "scraping1.py"], check=True)
-                    st.success("Scraping con scrapy-AngelS completado.")
+                    try:
+                        st.info("Iniciando proceso de scraping...")
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        
+                        # Inicializar el servicio de scraping con la configuración de BD
+                        
+                        scraper = WebScrapingService(DB_CONFIG)
+                        
+                        # Obtener el número total de empresas a procesar
+                        companies = scraper.get_companies_to_process(limit=limit)
+                        total_companies = len(companies)
+                        
+                        if total_companies == 0:
+                            st.warning("No hay empresas pendientes de procesar.")
+                            return
+                            
+                        processed = 0
+                        successful = 0
+                        
+                        # Procesar cada empresa y actualizar la barra de progreso
+                        for company in companies:
+                            try:
+                                status_text.text(f"Procesando: {company['razon_social']}")
+                                
+                                result = scraper.process_company(company)
+                                if result.get('url_exists'):
+                                    successful += 1
+                                    
+                                processed += 1
+                                progress_bar.progress(processed / total_companies)
+                                
+                            except Exception as e:
+                                st.error(f"Error procesando empresa {company['cod_infotel']}: {str(e)}")
+                                continue
+                        
+                        # Mostrar resumen final
+                        st.success(f"""
+                        Scraping completado:
+                        - Total procesadas: {processed}
+                        - URLs válidas encontradas: {successful}
+                        - Porcentaje de éxito: {(successful/processed*100):.2f}%
+                        """)
+                        
+                        # Mostrar métricas en columnas
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Total Procesadas", processed)
+                        with col2:
+                            st.metric("URLs Válidas", successful)
+                        with col3:
+                            st.metric("Tasa de Éxito", f"{(successful/processed*100):.1f}%")
+                            
+                    except Exception as e:
+                        st.error(f"Error en el proceso de scraping: {str(e)}")
+                        logger.error(f"Error en scraping: {str(e)}")
                 
         if st.session_state.processing_status:
             st.progress(st.session_state.processing_status["progress"])
