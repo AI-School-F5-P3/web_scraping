@@ -4,11 +4,16 @@ from langchain.agents import Tool, initialize_agent
 from langchain.chains.conversation.memory import ConversationBufferMemory
 from langchain.llms.base import LLM
 from langchain_groq import ChatGroq
+from langchain.callbacks.tracers import LangChainTracer
+from langchain.callbacks.manager import CallbackManager
+from langchain_core.tracers import ConsoleTracer
+from langchain_community.callbacks import StreamlitCallbackHandler
+import langsmith
 import requests
 import pandas as pd
 from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
-from config import GROQ_API_KEY, PROVINCIAS_ESPANA, HARDWARE_CONFIG
+from config import GROQ_API_KEY, PROVINCIAS_ESPANA, HARDWARE_CONFIG, LANGSMITH_API_KEY, LANGSMITH_PROJECT
 import re
 from scraping import ProWebScraper
 import unicodedata
@@ -27,6 +32,14 @@ class CustomLLM(LLM):
             "gpu_layers": -1,
             "n_gpu_layers": 50
         }
+        # Initialize LangSmith tracer
+        self.callback_manager = CallbackManager([
+            LangChainTracer(
+                project_name=LANGSMITH_PROJECT,
+                client=langsmith.Client(api_key=LANGSMITH_API_KEY)
+            ),
+            ConsoleTracer()
+        ])
 
     def _call(self, prompt: str, stop: List[str] = None) -> str:
         try:
@@ -76,6 +89,13 @@ class QueryContext:
     specified_columns: List[str] = field(default_factory=list)
 
 class DBAgent:
+    def __init__(self):
+        self.llm = None
+        # Initialize LangSmith tracer for the agent
+        self.tracer = LangChainTracer(
+            project_name=LANGSMITH_PROJECT,
+            client=langsmith.Client(api_key=LANGSMITH_API_KEY)
+        )
     ALLOWED_COLUMNS = [
         'cod_infotel', 'nif', 'razon_social', 'domicilio', 'cod_postal',
         'nom_poblacion', 'nom_provincia', 'url', 'e_commerce',
@@ -199,31 +219,45 @@ Output: {
     def generate_query(self, natural_query: str) -> Dict[str, Any]:
         """Generates SQL query from natural language input"""
         try:
-            ctx = self.analyze_query(natural_query)
+            # Start a new trace
+            with self.tracer.start_trace(
+                name="generate_sql_query",
+                metadata={"input": natural_query}
+            ) as trace:
+                ctx = self.analyze_query(natural_query)
+                result = None
 
-            if ctx.query_type == QueryType.NON_DB:
-                if any(keyword in natural_query.lower() for keyword in self.SOCIAL_KEYWORDS):
-                    return {
-                        "query": None,
-                        "explanation": "Actualmente no disponemos de información sobre redes sociales. Solo tenemos datos de URL y e-commerce.",
-                        "query_type": "non_db",
-                        "error": "Información de redes sociales no disponible"
-                    }
-                return {
-                    "query": None,
-                    "explanation": "Esta consulta no está relacionada con la base de datos de empresas",
-                    "query_type": "non_db",
-                    "error": "Esta consulta no está relacionada con la base de datos de empresas"
-                }
+                if ctx.query_type == QueryType.NON_DB:
+                    if any(keyword in natural_query.lower() for keyword in self.SOCIAL_KEYWORDS):
+                        result = {
+                            "query": None,
+                            "explanation": "Actualmente no disponemos de información sobre redes sociales. Solo tenemos datos de URL y e-commerce.",
+                            "query_type": "non_db",
+                            "error": "Información de redes sociales no disponible"
+                        }
+                    else:
+                        result = {
+                            "query": None,
+                            "explanation": "Esta consulta no está relacionada con la base de datos de empresas",
+                            "query_type": "non_db",
+                            "error": "Esta consulta no está relacionada con la base de datos de empresas"
+                        }
+                elif ctx.query_type == QueryType.AGGREGATE:
+                    result = self.generate_aggregate_query(ctx)
+                elif ctx.query_type == QueryType.COUNT:
+                    result = self.generate_count_query(ctx)
+                else:
+                    result = self.generate_table_query(ctx)
 
-            if ctx.query_type == QueryType.AGGREGATE:
-                return self.generate_aggregate_query(ctx)
-            elif ctx.query_type == QueryType.COUNT:
-                return self.generate_count_query(ctx)
-            else:
-                return self.generate_table_query(ctx)
+                # Add metadata before returning
+                trace.add_metadata({
+                    "query_type": ctx.query_type.value,
+                    "generated_sql": result.get("query")
+                })
+                return result
 
         except Exception as e:
+            self.tracer.on_chain_error(e)
             return {
                 "query": None,
                 "explanation": None,

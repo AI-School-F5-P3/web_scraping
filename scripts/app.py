@@ -14,6 +14,9 @@ import matplotlib.pyplot as plt
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 import unicodedata
+from langchain.callbacks import StreamlitCallbackHandler
+from config import LANGSMITH_API_KEY, LANGSMITH_PROJECT
+import os
 
 class EnterpriseApp:
     def __init__(self):
@@ -23,7 +26,15 @@ class EnterpriseApp:
         self.setup_agents()
         self.load_data_from_db()
         # Cargar datos de la BD si no hay nada en session_state
-        self.load_data_from_db()    
+        self.load_data_from_db()
+        
+        # Initialize StreamlitCallbackHandler for real-time updates
+        self.st_callback = StreamlitCallbackHandler(st.container())
+        
+        # Add LangSmith metrics to sidebar
+        with st.sidebar:
+            if st.checkbox("Show LangSmith Metrics"):
+                self.render_langsmith_metrics()
             
         # Enhanced page configuration
         st.set_page_config(
@@ -129,6 +140,41 @@ class EnterpriseApp:
             st.session_state.sql_model = list(SQL_MODELS.keys())[0]
         if "scraping_model" not in st.session_state:
             st.session_state.scraping_model = list(SCRAPING_MODELS.keys())[0]
+            
+    def render_langsmith_metrics(self):
+        """Renders LangSmith metrics in the sidebar"""
+        try:
+            client = langsmith.Client()
+            runs = client.list_runs(
+                project_name=LANGSMITH_PROJECT,
+                execution_order=1,
+                limit=100
+            )
+            
+            st.markdown("### 📊 LangSmith Metrics")
+            
+            # Calculate and display metrics
+            total_runs = len(runs)
+            successful_runs = sum(1 for run in runs if run.error is None)
+            avg_latency = sum(run.end_time - run.start_time for run in runs) / total_runs if total_runs > 0 else 0
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Runs", total_runs)
+            with col2:
+                st.metric("Success Rate", f"{(successful_runs/total_runs)*100:.1f}%" if total_runs > 0 else "N/A")
+            with col3:
+                st.metric("Avg Latency", f"{avg_latency:.2f}s")
+            
+            # Show recent runs
+            with st.expander("Recent Runs"):
+                for run in list(runs)[:5]:
+                    st.write(f"Type: {run.run_type}")
+                    st.write(f"Status: {'✅ Success' if run.error is None else '❌ Failed'}")
+                    st.write("---")
+                    
+        except Exception as e:
+            st.error(f"Error fetching LangSmith metrics: {str(e)}")
             
     def load_data_from_db(self):
         """Si no hay datos en sesión, se cargan desde la BD"""
