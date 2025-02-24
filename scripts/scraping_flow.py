@@ -1,4 +1,5 @@
 import concurrent
+from urllib.parse import urlparse
 import requests
 import re
 from urllib3.exceptions import InsecureRequestWarning
