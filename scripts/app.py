@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 import unicodedata
-
+import subprocess
 class EnterpriseApp:
     def __init__(self):
         self.init_session_state()
@@ -431,8 +431,22 @@ class EnterpriseApp:
                 value=50
             )
         with col2:
-            if st.button("Iniciar Scraping"):
-                self.process_scraping(limit)
+            scraping_option = st.selectbox(
+                "Selecciona el método de scraping:",
+                ["Scrapy con LLM AngelM", "Scrapy con scrapy-Jhon", "Scrapy con scrapy-AngelS"],
+                index=0
+            )
+            if st.button("Ejecutar Scraping"):
+                if scraping_option == "Scrapy con LLM AngelM":
+                    st.info("Esta opción aún no está implementada.")
+                elif scraping_option == "Scrapy con scrapy-Jhon":
+                    st.info("Ejecutando scrapy de John")
+                    self.process_scraping(limit)  # Mantiene la lógica existente
+                    st.success("Scraping con scrapy-Jhon completado.")
+                elif scraping_option == "Scrapy con scrapy-AngelS":
+                    st.info("Ejecutando scraping1.py...")
+                    subprocess.run(["python", "scraping1.py"], check=True)
+                    st.success("Scraping con scrapy-AngelS completado.")
                 
         if st.session_state.processing_status:
             st.progress(st.session_state.processing_status["progress"])
@@ -512,7 +526,9 @@ class EnterpriseApp:
                         
         except Exception as e:
             st.error(f"Error al procesar consulta: {str(e)}")
-
+            
+    
+            
     def process_scraping(self, limit: int):
         """Procesa el scraping de URLs utilizando procesamiento paralelo y muestra detalles."""
         try:
