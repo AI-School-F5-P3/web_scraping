@@ -1,4 +1,5 @@
 import concurrent
+import traceback
 from urllib.parse import urlparse
 import requests
 import re
@@ -61,15 +62,8 @@ class WebScrapingService:
     
 
     def get_companies_to_process(self, limit: int = 100) -> List[Dict]:
-        """
-        Obtiene empresas pendientes de procesar.
-        Solo obtiene aquellas que:
-        - No han sido procesadas (processed = FALSE)
-        - Y o bien:
-        - Tienen URL pero no ha sido verificada (url IS NOT NULL AND url_exists IS NULL)
-        - O la verificación falló (url_exists = FALSE)
-        """
         try:
+            print("\n=== Obteniendo empresas para procesar ===")
             query = """
                 SELECT cod_infotel, nif, razon_social, domicilio, 
                     cod_postal, nom_poblacion, nom_provincia, url
@@ -80,73 +74,76 @@ class WebScrapingService:
                 LIMIT %s
             """
             
-            # Usar DatabaseManager para ejecutar la consulta
+            print(f"Ejecutando query con límite: {limit}")
             results = self.db.execute_query(query, params=(limit,), return_df=True)
             
             if results is not None and not results.empty:
-                # Convertir DataFrame a lista de diccionarios
                 companies = results.to_dict('records')
-                
-                print(f"\nEmpresas encontradas para procesar: {len(companies)}")
+                print(f"\nEmpresas encontradas: {len(companies)}")
+                print("Primeras 5 empresas:")
                 for company in companies[:5]:
                     print(f"- {company['razon_social']}: {company['url']}")
-                    
                 return companies
-            
-            return []
+            else:
+                print("\n❌ No se encontraron empresas para procesar")
+                print("Posibles razones:")
+                print("1. Todas las empresas ya están procesadas (processed = TRUE)")
+                print("2. No hay empresas con URL válida")
+                print("3. La tabla está vacía")
+                return []
                 
         except Exception as e:
+            print(f"\n❌ Error obteniendo empresas: {str(e)}")
             logger.error(f"Error obteniendo empresas: {e}")
-            print(f"Error al obtener empresas: {e}")
             return []
 
-    def process_company(self, company: Dict) -> Dict:
+    def process_company(self, company: Dict) -> Tuple[bool, Dict]:
         """
         Procesa una empresa individual siguiendo el flujo definido
-        1. Si tiene URL, verifica si es válida
-        2. Si la URL no es válida o no existe, genera posibles URLs
-        3. Realiza scraping de la URL válida
         """
-        result = {
-            'cod_infotel': company['cod_infotel'],
-            'url_exists': False,
-            'phones': [],
-            'social_links': {},
-            'has_ecommerce': False
-        }
+        print("\n>>> PUNTO DE CONTROL 2: Iniciando process_company <<<")
+        print(f"Procesando empresa: {company['razon_social']}")
 
         try:
-            # Caso 1: La empresa tiene URL
-            if company.get('url'):
-                logger.info(f"Procesando empresa {company['cod_infotel']} con URL existente")
-                url = company['url']
-                if not url.startswith(('http://', 'https://')):
-                    url = 'https://' + url
-                
+            url = company.get('url')
+            if not url:
+                print("❌ URL no proporcionada")
+                return False, {
+                    'cod_infotel': company['cod_infotel'],
+                    'url_exists': False,
+                    'url_status': -1,
+                    'url_status_mensaje': "URL no proporcionada"
+                }
+
+            print("\n>>> PUNTO DE CONTROL 3: Antes de verify_company_url <<<")
+            try:
                 is_valid, data = self.verify_company_url(url, company)
-                if is_valid:
-                    result.update(data)
-                    result['url_exists'] = True
-                    return result
+            except Exception as e:
+                print(f"❌ EXCEPCIÓN en verify_company_url: {e}")
+                traceback.print_exc()
+                return False, {'cod_infotel': company['cod_infotel'], 'error': str(e)}
 
-            # Caso 2: Generar y verificar URLs posibles
-            logger.info(f"Generando URLs alternativas para {company['cod_infotel']}")
-            possible_urls = self.generate_possible_urls(company['razon_social'], company['nom_provincia'])
-            
-            if possible_urls:
-                # Verificar dominios y URLs en paralelo
-                valid_urls = self.verify_urls_parallel(possible_urls, company)
-                if valid_urls:
-                    # Usar la URL con mayor puntuación
-                    best_url = max(valid_urls.items(), key=lambda x: x[1].get('score', 0))[0]
-                    result.update(valid_urls[best_url])
-                    result['url_exists'] = True
+            print("\n>>> PUNTO DE CONTROL 4.1: Después de llamar a verify_company_url <<<")
+            print(f"🔄 Resultado de verify_company_url -> is_valid: {is_valid}")
+            print(f"🔄 Datos recibidos en process_company: {json.dumps(data, indent=2)}")
 
-            return result
+            if is_valid:
+                print("\n>>> PUNTO DE CONTROL 5: Retornando datos válidos <<<")
+                return True, data
+            else:
+                print("\n>>> PUNTO DE CONTROL 5: Retornando datos no válidos <<<")
+                return False, data
 
         except Exception as e:
-            logger.error(f"Error procesando empresa {company['cod_infotel']}: {e}")
-            return result
+            print(f"\n❌ ERROR en process_company: {str(e)}")
+            traceback.print_exc()
+            return False, {
+                'cod_infotel': company['cod_infotel'],
+                'url_exists': False,
+                'url_status': -1,
+                'url_status_mensaje': str(e)
+            }
+
 
     @staticmethod
     def clean_company_name(company_name: str) -> str:
@@ -290,21 +287,17 @@ class WebScrapingService:
         return data
     
     def verify_company_url(self, url: str, company: Dict) -> Tuple[bool, Dict]:
-        """Verifica una URL específica y extrae información"""
+        """
+        Verifica una URL específica y extrae información.
+        Returns:
+            Tuple[bool, Dict]: (éxito, datos extraídos)
+        """
         print(f"\n{'='*50}")
-        print(f"Procesando empresa: {company['razon_social']}")
-        print(f"URL original: {url}")
-        
+        print(f"🚀 Iniciando verify_company_url para: {company['razon_social']}")
+        print(f"🌍 URL original: {url}")
+
         session = requests.Session()
-        retry_strategy = Retry(
-            total=1,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
-        
+
         try:
             # Estructura inicial de datos
             data = {
@@ -328,16 +321,13 @@ class WebScrapingService:
             # Asegurar que la URL tenga protocolo
             if not url.startswith(('http://', 'https://')):
                 url = 'https://' + url
-            print(f"URL normalizada: {url}")
+            print(f"🔗 URL normalizada: {url}")
 
             # Verificar si la URL existe (DNS lookup)
             domain = urlparse(url).netloc
-            if domain.startswith('www.'):
-                base_domain = domain[4:]
-            else:
-                base_domain = domain
-                
-            print(f"Verificando dominio: {base_domain}")
+            base_domain = domain[4:] if domain.startswith('www.') else domain
+
+            print(f"🔍 Verificando dominio: {base_domain}")
             try:
                 dns.resolver.resolve(base_domain, 'A')
                 print("✅ Dominio válido (DNS)")
@@ -358,10 +348,10 @@ class WebScrapingService:
                 })
                 return False, data
 
-            # Intentar obtener el contenido
-            print("Intentando obtener contenido de la página...")
+            # Intentar obtener el contenido de la página
+            print("📡 Intentando obtener contenido de la página...")
             content = self.get_page_content(url, session)
-            
+
             if not content:
                 print("❌ No se pudo obtener contenido")
                 data.update({
@@ -371,11 +361,11 @@ class WebScrapingService:
                 return False, data
 
             print("✅ Contenido obtenido correctamente. URL válida!")
-            
-            # Si llegamos aquí, la URL es válida y accesible
+
+            # Procesar contenido HTML con BeautifulSoup
             soup = BeautifulSoup(content, 'html.parser')
-            
-            # Extraer información
+
+            # Extraer información básica
             data.update({
                 'url_exists': True,
                 'url_valida': url,
@@ -384,29 +374,37 @@ class WebScrapingService:
             })
 
             # Extraer teléfonos
-            data['phones'] = self.extract_phones(soup)
-            print(f"Teléfonos encontrados: {len(data['phones'])}")
+            phones = self.extract_phones(soup)
+            print(f"📞 Teléfonos extraídos: {phones}")
+            data['phones'] = phones
 
             # Extraer redes sociales
             social_links = self.extract_social_links(soup)
+            print(f"📲 Redes sociales extraídas: {json.dumps(social_links, indent=2)}")
             data['social_media'].update(social_links)
-            print(f"Redes sociales encontradas: {len([v for v in social_links.values() if v])}")
 
-            # Detectar ecommerce
+            # Detectar e-commerce
             is_ecommerce, ecommerce_data = self.detect_ecommerce(soup)
-            data['is_ecommerce'] = is_ecommerce
-            print(f"E-commerce detectado: {is_ecommerce}")
+            data['is_ecommerce'] = is_ecommerce  # Solo el booleano
+            data['ecommerce_data'] = ecommerce_data  # Guarda detalles adicionales si los necesitas
+            print(f"🛒 E-commerce detectado: {is_ecommerce}")
 
+            # Log final de datos antes de retornar
+            print("\n📤 Retornando desde verify_company_url:")
+            print(json.dumps(data, indent=2))
+
+            print("\n>>> PUNTO DE CONTROL 1: Saliendo de verify_company_url <<<")
             return True, data
-            
+
         except Exception as e:
-            print(f"❌ Error procesando URL: {str(e)}")
-            logger.error(f"Error verificando URL {url}: {e}")
+            print(f"❌ ERROR en verify_company_url: {str(e)}")
+            traceback.print_exc()
             data.update({
                 'url_status': -1,
                 'url_status_mensaje': str(e)
             })
             return False, data
+
         finally:
             session.close()
 
@@ -531,6 +529,7 @@ class WebScrapingService:
                 'linkedin': '',
                 'youtube': ''
             }
+            
     def detect_ecommerce(self, soup: BeautifulSoup) -> Tuple[bool, Dict]:
         """Detecta si una web tiene comercio electrónico"""
         ecommerce_indicators = {
@@ -591,41 +590,55 @@ class WebScrapingService:
             'evidence': evidence
         }
 
-    def update_company_data(self, company_id: str, data: Dict) -> bool:
-        """
-        Actualiza los datos de la empresa usando el DatabaseManager existente.
-        Convierte los datos al formato esperado por update_scraping_results
-        """
+    def update_company_data(self, company_id: str, data: Dict) -> Dict[str, Any]:
+        """Actualiza los datos de la empresa usando DatabaseManager"""
         try:
-            # Convertir los datos al formato esperado por DatabaseManager
+            print(f"\nActualizando datos para empresa {company_id}")
+            print(f"Datos recibidos:")
+            print(json.dumps(data, indent=2))
+
+            # Preparar los datos para la BD
             result_data = [{
                 'cod_infotel': company_id,
-                'url_exists': data['url_exists'],
-                'url_limpia': data['url_limpia'],
-                'status': data['url_status'],
-                'status_message': data['url_status_mensaje'],
-                'phones': data['phones'],
+                'url_exists': data.get('url_exists', False),
+                'url_valida': data.get('url_valida', ''),
+                'url_limpia': data.get('url_limpia', ''),
+                'status': data.get('url_status', -1),
+                'status_message': data.get('url_status_mensaje', ''),
+                'phones': data.get('phones', []),
                 'social_media': {
-                    'facebook': data['social_media'].get('facebook'),
-                    'twitter': data['social_media'].get('twitter'),
-                    'linkedin': data['social_media'].get('linkedin'),
-                    'instagram': data['social_media'].get('instagram'),
-                    'youtube': data['social_media'].get('youtube')
+                    'facebook': data.get('social_media', {}).get('facebook', ''),
+                    'twitter': data.get('social_media', {}).get('twitter', ''),
+                    'linkedin': data.get('social_media', {}).get('linkedin', ''),
+                    'instagram': data.get('social_media', {}).get('instagram', ''),
+                    'youtube': data.get('social_media', {}).get('youtube', '')
                 },
-                'is_ecommerce': data['is_ecommerce']
+                'is_ecommerce': data.get('is_ecommerce', False)
             }]
-            
-            # Usar el método de DatabaseManager
+
+            print("\nDatos formateados para BD:")
+            print(json.dumps(result_data, indent=2))
+
+            # Intentar la actualización
             result = self.db.update_scraping_results(result_data)
-            return result['status'] == 'success'
-            
+            print(f"Resultado de la actualización: {result}")
+
+            return result  # Retornar el resultado completo
+
         except Exception as e:
-            logger.error(f"Error actualizando datos de empresa {company_id}: {e}")
-            return False
+            print(f"❌ Error en update_company_data: {str(e)}")
+            logger.error(f"Error actualizando empresa {company_id}: {e}")
+            return {
+                "status": "error",
+                "message": str(e)
+            }
 
     def process_batch(self, limit: int = 100) -> Dict[str, Any]:
         """Procesa un lote de empresas"""
+        print("\n>>> PUNTO DE CONTROL 6: Iniciando process_batch <<<")
         companies = self.get_companies_to_process(limit)
+        print(f"Empresas a procesar: {len(companies)}")
+
         results = {
             'total': len(companies),
             'processed': 0,
@@ -635,27 +648,41 @@ class WebScrapingService:
 
         for company in companies:
             try:
-                data = self.process_company(company)
-                if self.update_company_data(company['cod_infotel'], data):
-                    results['successful'] += 1
+                print(f"\n>>> PUNTO DE CONTROL 6.1: Llamando process_company para {company['cod_infotel']} <<<")
+
+                success, data = self.process_company(company)
+
+                print("\n>>> PUNTO DE CONTROL 8: Resultado de process_company <<<")
+                print(f"success: {success}")
+                print(f"data: {json.dumps(data, indent=2)}")
+
+                if success:
+                    print("\n>>> PUNTO DE CONTROL 9: Intentando actualizar en BD <<<")
+                    update_result = self.update_company_data(company['cod_infotel'], data)
+                    print(f"Resultado actualización: {update_result}")
+
+                    if update_result.get('status') == 'success':
+                        results['successful'] += 1
+                        print("✅ Actualización exitosa")
+                    else:
+                        results['failed'] += 1
+                        print(f"❌ Error en actualización: {update_result.get('message')}")
                 else:
                     results['failed'] += 1
+                    print("❌ Procesamiento no exitoso")
+
             except Exception as e:
-                logger.error(f"Error en el procesamiento de {company['cod_infotel']}: {e}")
+                print(f"\n❌ Error procesando empresa: {str(e)}")
+                traceback.print_exc()
                 results['failed'] += 1
             finally:
                 results['processed'] += 1
+                print(f"\nProgreso: {results['processed']}/{results['total']}")
 
+        print("\n>>> PUNTO DE CONTROL 10: Resumen final <<<")
+        print(json.dumps(results, indent=2))
         return results
-    def save_results(self, results: Dict) -> bool:
-        """
-        Guarda los resultados del scraping en la base de datos
-        """
-        try:
-            return self.db.update_scraping_results([results])['status'] == 'success'
-        except Exception as e:
-            logger.error(f"Error guardando resultados: {e}")
-            return False
+    
 
 def main():
     # Usar la configuración de la base de datos desde config.py

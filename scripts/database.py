@@ -1,5 +1,6 @@
 # database.py
 
+import json
 import psycopg2
 import pandas as pd
 import numpy as np
@@ -184,48 +185,78 @@ class DatabaseManager:
 
     def update_scraping_results(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
         try:
+            print("\nActualizando resultados en la BD...")
             update_query = """
             UPDATE sociedades 
             SET 
-                url_exists = %(exists)s,
-                url_limpia = %(clean_url)s,
-                url_status = %(status)s,
-                url_status_mensaje = %(status_message)s,
-                telefono_1 = %(phone1)s,
-                telefono_2 = %(phone2)s,
-                telefono_3 = %(phone3)s,
+                url_exists = %(url_exists)s,
+                url_valida = %(url_valida)s,
+                url_limpia = %(url_limpia)s,
+                url_status = %(url_status)s,
+                url_status_mensaje = %(url_status_message)s,
+                telefono_1 = %(telefono_1)s,
+                telefono_2 = %(telefono_2)s,
+                telefono_3 = %(telefono_3)s,
                 facebook = %(facebook)s,
                 twitter = %(twitter)s,
                 linkedin = %(linkedin)s,
                 instagram = %(instagram)s,
                 youtube = %(youtube)s,
-                e_commerce = %(ecommerce)s,
+                e_commerce = %(e_commerce)s,
+                processed = TRUE,
                 fecha_actualizacion = NOW()
-            WHERE cod_infotel = %(cod_infotel)s
+            WHERE cod_infotel = %(cod_infotel)s RETURNING cod_infotel
             """
             
+            updated_companies = []
             with self.connection.cursor() as cursor:
                 for result in results:
-                    params = {
-                        'exists': result.get('url_exists', False),
-                        'clean_url': result.get('url_limpia'),
-                        'status': result.get('url_status'),
-                        'status_message': result.get('url_status_mensaje'),
-                        'phone1': result.get('phones', [''])[0],
-                        'phone2': result.get('phones', ['', ''])[1],
-                        'phone3': result.get('phones', ['', '', ''])[2],
-                        'facebook': result.get('social_media', {}).get('facebook'),
-                        'twitter': result.get('social_media', {}).get('twitter'),
-                        'linkedin': result.get('social_media', {}).get('linkedin'),
-                        'instagram': result.get('social_media', {}).get('instagram'),
-                        'youtube': result.get('social_media', {}).get('youtube'),
-                        'ecommerce': result.get('is_ecommerce', False),
-                        'cod_infotel': result.get('cod_infotel')
-                    }
-                    cursor.execute(update_query, params)
-                    
-            return {"status": "success", "updated": len(results)}
+                    try:
+                        print(f"\nActualizando empresa {result.get('cod_infotel')}...")
+
+                        # Asegurar que los nombres de las claves coincidan con la consulta SQL
+                        params = {
+                            'url_exists': result.get('url_exists', False),
+                            'url_valida': result.get('url_valida', ''),
+                            'url_limpia': result.get('url_limpia', ''),
+                            'url_status': result.get('url_status', -1),
+                            'url_status_message': result.get('url_status_mensaje', ''),
+                            'telefono_1': result.get('phones', ['', '', ''])[0],
+                            'telefono_2': result.get('phones', ['', '', ''])[1],
+                            'telefono_3': result.get('phones', ['', '', ''])[2],
+                            'facebook': result.get('social_media', {}).get('facebook', ''),
+                            'twitter': result.get('social_media', {}).get('twitter', ''),
+                            'linkedin': result.get('social_media', {}).get('linkedin', ''),
+                            'instagram': result.get('social_media', {}).get('instagram', ''),
+                            'youtube': result.get('social_media', {}).get('youtube', ''),
+                            'e_commerce': result.get('is_ecommerce', False),
+                            'cod_infotel': result.get('cod_infotel')
+                        }
+
+                        print("Ejecutando actualización con parámetros:")
+                        print(json.dumps(params, indent=2))
+
+                        cursor.execute(update_query, params)
+
+                        # Verificar si realmente se actualizó la fila
+                        if cursor.rowcount > 0:
+                            self.connection.commit()  # ✅ Commit inmediato
+                            updated_companies.append(result.get('cod_infotel'))
+                            print(f"✅ Empresa {result.get('cod_infotel')} actualizada")
+                        else:
+                            print(f"⚠️ No se actualizó la empresa {result.get('cod_infotel')}.")
+
+                    except Exception as e:
+                        print(f"❌ Error actualizando empresa {result.get('cod_infotel')}: {str(e)}")
+                        self.connection.rollback()  # ❌ Evita afectar otras actualizaciones
+                        continue  # Continúa con la siguiente empresa
+                
+            print(f"\nActualización completada. Empresas actualizadas: {len(updated_companies)}")
+            return {"status": "success", "updated": len(updated_companies)}
+            
         except Exception as e:
+            self.connection.rollback()
+            print(f"❌ Error en update_scraping_results: {str(e)}")
             return {"status": "error", "message": str(e)}
 
         
