@@ -129,10 +129,7 @@ class WebScrapingService:
             logger.error(f"Error obteniendo empresas: {e}")
             return []
                 
-        except Exception as e:
-            print(f"\n❌ Error obteniendo empresas: {str(e)}")
-            logger.error(f"Error obteniendo empresas: {e}")
-            return []
+        
 
     def process_company(self, company: Dict) -> Tuple[bool, Dict]:
         """
