@@ -25,13 +25,14 @@ class DatabaseManager:
             cursor.execute(f"SET effective_cache_size = '{ram_gb*3//4}GB'")
             
             system = platform.system()
-            if system == "Darwin":
-                cursor.execute("SET effective_io_concurrency = 0")
-            else:
+            # No establecer effective_io_concurrency en Windows
+            if system == "Linux":
                 try:
                     cursor.execute("SET effective_io_concurrency = 200")
                 except Exception as e:
                     print(f"Warning: {e} (setting effective_io_concurrency on {system})")
+            elif system == "Darwin":  # MacOS
+                cursor.execute("SET effective_io_concurrency = 0")
                         
             cursor.execute("SET random_page_cost = 1.1")
             cursor.execute("SET cpu_tuple_cost = 0.03")
