@@ -9,7 +9,6 @@ from urllib3.util.retry import Retry
 import unicodedata
 from bs4 import BeautifulSoup
 from datetime import datetime
-import whois
 import dns.resolver
 from functools import wraps
 import time
@@ -20,6 +19,7 @@ import logging
 from typing import List, Dict, Any, Tuple, Set
 from concurrent.futures import ThreadPoolExecutor
 from config import DB_CONFIG
+from database import DatabaseManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -50,23 +50,15 @@ class RateLimiter:
 
 class WebScrapingService:
     def __init__(self, db_params: dict):
+        
         """
         Inicializa el servicio de web scraping
         :param db_params: Parámetros de conexión a PostgreSQL
         """
         self.db_params = db_params
-        self.conn = None
-        self.cursor = None
-        self.connect_db()
+        self.db = DatabaseManager()  # Usar DatabaseManager en lugar de conexión directa
 
-    def connect_db(self):
-        """Establece conexión con PostgreSQL"""
-        try:
-            self.conn = psycopg2.connect(**self.db_params)
-            self.cursor = self.conn.cursor()
-        except Exception as e:
-            logger.error(f"Error conectando a la base de datos: {e}")
-            raise
+    
 
     def get_companies_to_process(self, limit: int = 100) -> List[Dict]:
         """
@@ -88,22 +80,21 @@ class WebScrapingService:
                 LIMIT %s
             """
             
-            # Ejecutar la consulta y obtener los resultados
-            self.cursor.execute(query, (limit,))
-            results = self.cursor.fetchall()  # Obtener los resultados antes de cerrar el cursor
+            # Usar DatabaseManager para ejecutar la consulta
+            results = self.db.execute_query(query, params=(limit,), return_df=True)
             
-            # Obtener nombres de columnas
-            columns = [desc[0] for desc in self.cursor.description]
-            
-            # Convertir a lista de diccionarios
-            companies = [dict(zip(columns, row)) for row in results]
-            
-            print(f"\nEmpresas encontradas para procesar: {len(companies)}")
-            for company in companies[:5]:
-                print(f"- {company['razon_social']}: {company['url']}")
+            if results is not None and not results.empty:
+                # Convertir DataFrame a lista de diccionarios
+                companies = results.to_dict('records')
                 
-            return companies
+                print(f"\nEmpresas encontradas para procesar: {len(companies)}")
+                for company in companies[:5]:
+                    print(f"- {company['razon_social']}: {company['url']}")
+                    
+                return companies
             
+            return []
+                
         except Exception as e:
             logger.error(f"Error obteniendo empresas: {e}")
             print(f"Error al obtener empresas: {e}")
