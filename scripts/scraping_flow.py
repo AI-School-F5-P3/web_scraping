@@ -431,7 +431,106 @@ class WebScrapingService:
         except Exception as e:
             print(f"Error accediendo a {url}: {str(e)}")
             return None
+        
+    def extract_phones(self, soup: BeautifulSoup) -> List[str]:
+        """
+        Extrae teléfonos de una página web usando BeautifulSoup
+        """
+        phones = set()  # Usamos set para evitar duplicados
 
+        try:
+            # 1. Buscar enlaces tipo tel:
+            tel_links = soup.find_all('a', href=re.compile(r'^tel:'))
+            for link in tel_links:
+                href = link.get('href', '')
+                phone = re.sub(r'[^\d+]', '', href.replace('tel:', ''))
+                if phone.startswith('+'):
+                    phones.add(phone)
+                elif phone.startswith('34'):
+                    phones.add(f"+{phone}")
+                elif len(phone) == 9:  # Número español sin prefijo
+                    phones.add(f"+34{phone}")
+
+            # 2. Buscar en el texto con patrón mejorado
+            phone_pattern = r'(?:\+34|0034|34)?[\s-]?(?:[\s-]?\d){9}'
+
+            # Buscar teléfonos en elementos de texto
+            for element in soup.find_all(['p', 'div', 'span', 'a']):
+                if element.string:
+                    found_phones = re.findall(phone_pattern, element.string)
+                    for phone in found_phones:
+                        clean_phone = re.sub(r'[^\d]', '', phone)
+                        if len(clean_phone) == 9:
+                            phones.add(f"+34{clean_phone}")
+                        elif len(clean_phone) > 9:
+                            phones.add(f"+{clean_phone}")
+
+            # 3. Buscar en atributos data-* que podrían contener teléfonos
+            for element in soup.find_all(attrs=re.compile(r'^data-')):
+                for attr_name, attr_value in element.attrs.items():
+                    if isinstance(attr_value, str):
+                        found_phones = re.findall(phone_pattern, attr_value)
+                        for phone in found_phones:
+                            clean_phone = re.sub(r'[^\d]', '', phone)
+                            if len(clean_phone) == 9:
+                                phones.add(f"+34{clean_phone}")
+                            elif len(clean_phone) > 9:
+                                phones.add(f"+{clean_phone}")
+
+            # Convertir el set a lista y limitar a 3 teléfonos
+            return list(phones)[:3]
+
+        except Exception as e:
+            logger.error(f"Error extrayendo teléfonos: {e}")
+            return []
+
+    def extract_social_links(self, soup: BeautifulSoup) -> Dict[str, str]:
+        """
+        Extrae enlaces a redes sociales de una página web
+        """
+        try:
+            social_links = {
+                'facebook': '',
+                'twitter': '',
+                'instagram': '',
+                'linkedin': '',
+                'youtube': ''
+            }
+
+            # Patrones mejorados para redes sociales
+            social_patterns = {
+                'facebook': r'facebook\.com/(?!sharer|share)([^/?&]+)',
+                'twitter': r'twitter\.com/(?!share|intent)([^/?&]+)',
+                'instagram': r'instagram\.com/([^/?&]+)',
+                'linkedin': r'linkedin\.com/(?:company|in)/([^/?&]+)',
+                'youtube': r'youtube\.com/(?:user|channel|c)/([^/?&]+)'
+            }
+
+            # Buscar enlaces de redes sociales
+            for link in soup.find_all('a', href=True):
+                href = link['href'].lower()
+
+                # Ignorar links de compartir
+                if 'sharer' in href or 'share?' in href or 'intent/tweet' in href:
+                    continue
+
+                for network, pattern in social_patterns.items():
+                    if network in href:
+                        match = re.search(pattern, href)
+                        if match:
+                            social_links[network] = href
+
+            return social_links
+
+        except Exception as e:
+            logger.error(f"Error extrayendo enlaces sociales: {e}")
+            return {
+                'facebook': '',
+                'twitter': '',
+                'instagram': '',
+                'linkedin': '',
+                'youtube': ''
+            }
     def detect_ecommerce(self, soup: BeautifulSoup) -> Tuple[bool, Dict]:
         """Detecta si una web tiene comercio electrónico"""
         ecommerce_indicators = {
