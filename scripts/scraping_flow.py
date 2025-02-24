@@ -19,8 +19,7 @@ import psycopg2
 import logging
 from typing import List, Dict, Any, Tuple, Set
 from concurrent.futures import ThreadPoolExecutor
-from config import DB_CONFIG
-from database import DatabaseManager
+from config import DB_CONFIG, TIMEOUT_CONFIG
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -51,15 +50,50 @@ class RateLimiter:
 
 class WebScrapingService:
     def __init__(self, db_params: dict):
-        
         """
         Inicializa el servicio de web scraping
         :param db_params: Parámetros de conexión a PostgreSQL
         """
         self.db_params = db_params
-        self.db = DatabaseManager()  # Usar DatabaseManager en lugar de conexión directa
-
+        try:
+            # Conectar directamente a PostgreSQL
+            self.connection = psycopg2.connect(**db_params)
+            self.connection.autocommit = True
+            logger.info("Conexión a la base de datos establecida correctamente")
+        except Exception as e:
+            logger.error(f"Error conectando a la base de datos: {str(e)}")
+            self.connection = None
     
+    def execute_query(self, query: str, params: tuple = None, return_df=False):
+        """
+        Ejecuta una consulta SQL y opcionalmente retorna los resultados como DataFrame
+        """
+        import pandas as pd
+        try:
+            if self.connection is None or self.connection.closed:
+                self.connection = psycopg2.connect(**self.db_params)
+                self.connection.autocommit = True
+                
+            with self.connection.cursor() as cursor:
+                if params:
+                    cursor.execute(query, params)
+                else:
+                    cursor.execute(query)
+                    
+                if cursor.description:  # Si la consulta retorna resultados
+                    columns = [desc[0] for desc in cursor.description]
+                    results = cursor.fetchall()
+                    
+                    if return_df:
+                        df = pd.DataFrame(results, columns=columns)
+                        return df
+                    return results
+                return None
+        except Exception as e:
+            logger.error(f"Error ejecutando consulta: {str(e)}")
+            if self.connection and not self.connection.closed:
+                self.connection.rollback()
+            return None
 
     def get_companies_to_process(self, limit: int = 100) -> List[Dict]:
         try:
@@ -68,29 +102,32 @@ class WebScrapingService:
                 SELECT cod_infotel, nif, razon_social, domicilio, 
                     cod_postal, nom_poblacion, nom_provincia, url
                 FROM sociedades 
-                WHERE url IS NOT NULL 
-                AND url != ''
-                AND processed = FALSE
+                WHERE processed = FALSE OR processed IS NULL
                 LIMIT %s
             """
             
             print(f"Ejecutando query con límite: {limit}")
-            results = self.db.execute_query(query, params=(limit,), return_df=True)
+            results = self.execute_query(query, params=(limit,), return_df=True)
             
             if results is not None and not results.empty:
                 companies = results.to_dict('records')
                 print(f"\nEmpresas encontradas: {len(companies)}")
                 print("Primeras 5 empresas:")
                 for company in companies[:5]:
-                    print(f"- {company['razon_social']}: {company['url']}")
+                    url_display = company['url'] if company.get('url') else "Sin URL"
+                    print(f"- {company['razon_social']}: {url_display}")
                 return companies
             else:
                 print("\n❌ No se encontraron empresas para procesar")
                 print("Posibles razones:")
                 print("1. Todas las empresas ya están procesadas (processed = TRUE)")
-                print("2. No hay empresas con URL válida")
-                print("3. La tabla está vacía")
+                print("2. La tabla está vacía")
                 return []
+                
+        except Exception as e:
+            print(f"\n❌ Error obteniendo empresas: {str(e)}")
+            logger.error(f"Error obteniendo empresas: {e}")
+            return []
                 
         except Exception as e:
             print(f"\n❌ Error obteniendo empresas: {str(e)}")
@@ -101,38 +138,57 @@ class WebScrapingService:
         """
         Procesa una empresa individual siguiendo el flujo definido
         """
-        print("\n>>> PUNTO DE CONTROL 2: Iniciando process_company <<<")
-        print(f"Procesando empresa: {company['razon_social']}")
+        print(f"\nProcesando empresa: {company['razon_social']}")
 
         try:
+            # Verificar si la empresa tiene URL
             url = company.get('url')
-            if not url:
-                print("❌ URL no proporcionada")
-                return False, {
-                    'cod_infotel': company['cod_infotel'],
-                    'url_exists': False,
-                    'url_status': -1,
-                    'url_status_mensaje': "URL no proporcionada"
-                }
-
-            print("\n>>> PUNTO DE CONTROL 3: Antes de verify_company_url <<<")
-            try:
+            
+            # Variable para almacenar si se encontró una URL válida
+            url_encontrada = False
+            
+            # Si tiene URL, verificarla primero
+            if url and url.strip():
+                print(f"Verificando URL original: {url}")
                 is_valid, data = self.verify_company_url(url, company)
-            except Exception as e:
-                print(f"❌ EXCEPCIÓN en verify_company_url: {e}")
-                traceback.print_exc()
-                return False, {'cod_infotel': company['cod_infotel'], 'error': str(e)}
-
-            print("\n>>> PUNTO DE CONTROL 4.1: Después de llamar a verify_company_url <<<")
-            print(f"🔄 Resultado de verify_company_url -> is_valid: {is_valid}")
-            print(f"🔄 Datos recibidos en process_company: {json.dumps(data, indent=2)}")
-
-            if is_valid:
-                print("\n>>> PUNTO DE CONTROL 5: Retornando datos válidos <<<")
-                return True, data
+                
+                # Si la URL original es válida, devolver los datos
+                if is_valid:
+                    print(f"✅ URL original válida: {url}")
+                    return True, data
+                
+                print("❌ URL original no válida.")
             else:
-                print("\n>>> PUNTO DE CONTROL 5: Retornando datos no válidos <<<")
-                return False, data
+                print("ℹ️ La empresa no tiene URL. Generando alternativas...")
+            
+            # Generar URLs alternativas
+            print("Generando URLs alternativas...")
+            alternative_urls = self.generate_possible_urls(company['razon_social'], company.get('nom_provincia'))
+            
+            if alternative_urls:
+                print(f"Se generaron {len(alternative_urls)} URLs alternativas")
+                
+                # Verificar URLs alternativas
+                print("Verificando URLs alternativas...")
+                url_results = self.verify_urls_parallel(alternative_urls, company)
+                
+                if url_results:
+                    # Encontrar la mejor URL
+                    best_url, best_data = self.choose_best_url(url_results)
+                    print(f"✅ Mejor URL alternativa encontrada: {best_url}")
+                    return True, best_data
+                else:
+                    print("❌ No se encontraron URLs alternativas válidas")
+            else:
+                print("❌ No se pudieron generar URLs alternativas")
+            
+            # Si llegamos aquí, no se encontró ninguna URL válida
+            return False, {
+                'cod_infotel': company['cod_infotel'],
+                'url_exists': False,
+                'url_status': -1,
+                'url_status_mensaje': "No se encontró URL válida para esta empresa"
+            }
 
         except Exception as e:
             print(f"\n❌ ERROR en process_company: {str(e)}")
@@ -143,7 +199,6 @@ class WebScrapingService:
                 'url_status': -1,
                 'url_status_mensaje': str(e)
             }
-
 
     @staticmethod
     def clean_company_name(company_name: str) -> str:
@@ -171,120 +226,262 @@ class WebScrapingService:
         """Genera posibles URLs basadas en el nombre de la empresa"""
         valid_domains = set()
         clean_name = self.clean_company_name(company_name)
+        
+        if not clean_name:
+            return valid_domains
+            
         words = clean_name.split('-')
         
         # Determinar dominios basados en provincia
         domains = ['.es', '.com']
         if provincia:
             provincia_norm = unicodedata.normalize('NFKD', str(provincia)).encode('ASCII', 'ignore').decode()
-            if provincia_norm in ['BARCELONA', 'TARRAGONA', 'LERIDA', 'GIRONA']:
+            if provincia_norm.upper() in ['BARCELONA', 'TARRAGONA', 'LERIDA', 'GIRONA']:
                 domains.append('.cat')
-            elif provincia_norm in ['LA CORUNA', 'LUGO', 'ORENSE', 'PONTEVEDRA']:
+            elif provincia_norm.upper() in ['LA CORUNA', 'LUGO', 'ORENSE', 'PONTEVEDRA']:
                 domains.append('.gal')
-            elif provincia_norm in ['ALAVA', 'VIZCAYA', 'GUIPUZCOA']:
+            elif provincia_norm.upper() in ['ALAVA', 'VIZCAYA', 'GUIPUZCOA']:
                 domains.append('.eus')
 
-        # Generar y verificar URLs
-        for i in range(len(words), 0, -1):
-            combination = ''.join(words[:i])
+        # Generar combinaciones de nombres
+        name_combinations = []
+        
+        # Nombre completo
+        name_combinations.append(clean_name)
+        
+        # Primeras palabras si hay más de una
+        if len(words) > 1:
+            # Primera palabra
+            name_combinations.append(words[0])
+            
+            # Dos primeras palabras
+            if len(words) > 2:
+                name_combinations.append('-'.join(words[:2]))
+                
+            # Tres primeras palabras
+            if len(words) > 3:
+                name_combinations.append('-'.join(words[:3]))
+        
+        # Generar las URLs combinando nombres y dominios
+        for name in name_combinations:
             for domain in domains:
                 for prefix in ['www.', '']:
-                    url = f"https://{prefix}{combination}{domain}"
+                    url = f"https://{prefix}{name}{domain}"
                     if self.verify_domain(url):
                         valid_domains.add(url)
-
+                        print(f"URL válida generada: {url}")
+        
         return valid_domains
 
     @staticmethod
     def verify_domain(url: str) -> bool:
         """Verifica si un dominio existe"""
-        domain = url.replace('https://', '').replace('http://', '')
-        if domain.startswith('www.'):
-            base_domain = domain[4:]
-        else:
-            base_domain = domain
-
         try:
-            dns.resolver.resolve(base_domain, 'A')
-            return True
-        except:
+            domain = url.replace('https://', '').replace('http://', '')
+            if domain.startswith('www.'):
+                base_domain = domain[4:]
+            else:
+                base_domain = domain
+                
+            # Si no hay un punto en el dominio, no es un dominio válido
+            if '.' not in base_domain:
+                return False
+                
+            # Extraer solo el nombre de dominio sin la ruta
+            base_domain = base_domain.split('/')[0]
+
             try:
-                socket.gethostbyname(domain)
+                dns.resolver.resolve(base_domain, 'A')
                 return True
             except:
-                return False
+                try:
+                    socket.gethostbyname(domain)
+                    return True
+                except:
+                    return False
+        except Exception as e:
+            print(f"Error verificando dominio {url}: {str(e)}")
+            return False
 
     def verify_urls_parallel(self, urls: Set[str], company: Dict) -> Dict[str, Dict]:
-        """Verifica múltiples URLs en paralelo"""
+        """
+        Verifica múltiples URLs en paralelo y devuelve los resultados con puntuación
+        """
         results = {}
         with ThreadPoolExecutor(max_workers=4) as executor:
             future_to_url = {
-                executor.submit(self.verify_company_url, url, company): url 
+                executor.submit(self.verify_and_score_url, url, company): url 
                 for url in urls
             }
             for future in concurrent.futures.as_completed(future_to_url):
                 url = future_to_url[future]
                 try:
-                    is_valid, data = future.result()
+                    is_valid, data, score = future.result()
                     if is_valid:
+                        # Guardar los datos junto con la puntuación
+                        data['score'] = score
                         results[url] = data
+                        print(f"URL válida: {url} (Puntuación: {score})")
                 except Exception as e:
                     logger.error(f"Error verificando URL {url}: {e}")
 
         return results
     
-    def verify_company_data(self, soup: BeautifulSoup, company: Dict) -> Dict:
-        """Verifica información de la empresa en la página"""
-        data = {
-            'provincia_en_web': False,
-            'cp_en_web': False,
-            'nif_en_web': False
-        }
+    def verify_and_score_url(self, url: str, company: Dict) -> Tuple[bool, Dict, int]:
+        """
+        Verifica una URL y le asigna una puntuación
+        """
+        try:
+            is_valid, data = self.verify_company_url(url, company)
+            
+            if is_valid:
+                # Obtener contenido para puntuar
+                session = requests.Session()
+                content = self.get_page_content(url, session)
+                
+                if content:
+                    soup = BeautifulSoup(content, 'html.parser')
+                    score = self.score_website(url, soup, company)
+                    data['score'] = score
+                    return True, data, score
+                    
+            return False, {}, 0
+                
+        except Exception as e:
+            print(f"Error en verify_and_score_url para {url}: {e}")
+            return False, {}, 0
+    
+    def choose_best_url(self, url_results: Dict[str, Dict]) -> Tuple[str, Dict]:
+        """
+        Elige la mejor URL basada en puntuación
+        """
+        if not url_results:
+            return None, {}
+            
+        # Encontrar la URL con la puntuación más alta
+        best_url = None
+        best_score = -1
+        best_data = {}
         
-        # Obtener todo el texto de la página en minúsculas
+        for url, data in url_results.items():
+            score = data.get('score', 0)
+            print(f"URL: {url} - Puntuación: {score}")
+            
+            if score > best_score:
+                best_score = score
+                best_url = url
+                best_data = data
+        
+        print(f"Mejor URL seleccionada: {best_url} con puntuación {best_score}")
+        return best_url, best_data
+
+    def score_website(self, url: str, soup: BeautifulSoup, company: Dict) -> int:
+        """
+        Asigna una puntuación a un sitio web basado en su relevancia para la empresa
+        """
+        score = 0
+        
+        # Obtener el texto completo y limpiarlo
         full_text = soup.get_text().lower()
         
-        # Verificar provincia
+        # 1. Verificar si el nombre de la empresa aparece en el sitio
+        if company.get('razon_social'):
+            company_name = company['razon_social'].lower()
+            clean_name = self.clean_company_name(company_name)
+            words = clean_name.split('-')
+            
+            # Si el nombre completo aparece exactamente, alta puntuación
+            if company_name in full_text:
+                score += 10
+            
+            # Si aparecen partes significativas del nombre
+            for word in words:
+                if len(word) > 3 and word in full_text:
+                    score += 2
+        
+        # 2. Verificar si la provincia aparece
         if company.get('nom_provincia'):
-            provincia_lower = company['nom_provincia'].lower()
-            # Normalizar el texto (quitar acentos)
-            provincia_norm = ''.join(c for c in unicodedata.normalize('NFD', provincia_lower)
-                                if unicodedata.category(c) != 'Mn')
-            if provincia_lower in full_text or provincia_norm in full_text:
-                data['provincia_en_web'] = True
+            provincia = company['nom_provincia'].lower()
+            if provincia in full_text:
+                score += 5
         
-        # Verificar código postal
+        # 3. Verificar si el código postal aparece
         if company.get('cod_postal'):
-            cp_str = str(company['cod_postal']).strip()
-            if len(cp_str) == 4:
-                cp_str = '0' + cp_str  # Asegurar 5 dígitos
-            
-            cp_patterns = [
-                rf'\b{cp_str}\b',  # Código postal exacto
-                rf'CP\s*{cp_str}',  # CP seguido del código
-                rf'C\.P\.\s*{cp_str}'  # C.P. seguido del código
-            ]
-            
-            for pattern in cp_patterns:
-                if re.search(pattern, full_text, re.IGNORECASE):
-                    data['cp_en_web'] = True
-                    break
+            cp = str(company['cod_postal']).strip()
+            if cp in full_text:
+                score += 7
         
-        # Verificar NIF
+        # 4. Verificar si el NIF/CIF aparece
         if company.get('nif'):
-            nif_clean = company['nif'].upper().strip()
-            nif_patterns = [
-                rf'\b{nif_clean}\b',  # NIF exacto
-                rf'NIF\s*:?\s*{nif_clean}',  # NIF: seguido del número
-                rf'CIF\s*:?\s*{nif_clean}'   # CIF: seguido del número
-            ]
-            
-            for pattern in nif_patterns:
-                if re.search(pattern, full_text, re.IGNORECASE):
-                    data['nif_en_web'] = True
-                    break
+            nif = company['nif'].lower()
+            if nif in full_text:
+                score += 15  # Alta puntuación, muy específico
         
-        return data
+        # 5. Verificar si la dirección aparece
+        if company.get('domicilio'):
+            direccion = company['domicilio'].lower()
+            if direccion in full_text:
+                score += 10
+            else:
+                # Buscar partes de la dirección (número, calle, etc.)
+                parts = direccion.split()
+                for part in parts:
+                    if len(part) > 3 and part in full_text:
+                        score += 2
+        
+        # 6. Verificar si la población aparece
+        if company.get('nom_poblacion'):
+            poblacion = company['nom_poblacion'].lower()
+            if poblacion in full_text:
+                score += 5
+        
+        # 7. Verificar elementos típicos de un sitio corporativo
+        corporate_terms = [
+            'contacto', 'contact', 'quienes somos', 'about us', 'sobre nosotros',
+            'política de privacidad', 'privacy policy', 'aviso legal', 'legal notice',
+            'nuestros servicios', 'our services', 'productos', 'products'
+        ]
+        
+        for term in corporate_terms:
+            if term in full_text:
+                score += 1
+        
+        # 8. Verificar si tiene secciones típicas en los menús
+        for nav in soup.find_all(['nav', 'header']):
+            nav_text = nav.get_text().lower()
+            for term in corporate_terms:
+                if term in nav_text:
+                    score += 2  # Mayor peso en la navegación
+        
+        # 9. Verificar si tiene formulario de contacto
+        contact_forms = soup.find_all('form')
+        for form in contact_forms:
+            if 'contact' in str(form) or 'contacto' in str(form):
+                score += 3
+        
+        # 10. Verificar si tiene teléfonos
+        phones = self.extract_phones(soup)
+        if phones:
+            score += len(phones) * 2
+        
+        # 11. Verificar si tiene redes sociales
+        social_links = self.extract_social_links(soup)
+        social_count = sum(1 for value in social_links.values() if value)
+        score += social_count * 2
+        
+        # 12. Penalizar sitios que parecen directorios generales
+        directory_terms = [
+            'directorio de empresas', 'business directory',
+            'listado de empresas', 'company listing',
+            'todas las empresas', 'all companies'
+        ]
+        
+        for term in directory_terms:
+            if term in full_text:
+                score -= 10
+        
+        print(f"Puntuación para {url}: {score}")
+        return score
     
     def verify_company_url(self, url: str, company: Dict) -> Tuple[bool, Dict]:
         """
@@ -389,11 +586,6 @@ class WebScrapingService:
             data['ecommerce_data'] = ecommerce_data  # Guarda detalles adicionales si los necesitas
             print(f"🛒 E-commerce detectado: {is_ecommerce}")
 
-            # Log final de datos antes de retornar
-            print("\n📤 Retornando desde verify_company_url:")
-            print(json.dumps(data, indent=2))
-
-            print("\n>>> PUNTO DE CONTROL 1: Saliendo de verify_company_url <<<")
             return True, data
 
         except Exception as e:
@@ -590,112 +782,175 @@ class WebScrapingService:
             'evidence': evidence
         }
 
-    def update_company_data(self, company_id: str, data: Dict) -> Dict[str, Any]:
-        """Actualiza los datos de la empresa usando DatabaseManager"""
+    def update_company_data(self, company_id: int, data: Dict) -> Dict[str, Any]:
+        """Actualiza los datos de la empresa en la base de datos"""
         try:
             print(f"\nActualizando datos para empresa {company_id}")
-            print(f"Datos recibidos:")
-            print(json.dumps(data, indent=2))
-
-            # Preparar los datos para la BD
-            result_data = [{
-                'cod_infotel': company_id,
-                'url_exists': data.get('url_exists', False),
-                'url_valida': data.get('url_valida', ''),
-                'url_limpia': data.get('url_limpia', ''),
-                'status': data.get('url_status', -1),
-                'status_message': data.get('url_status_mensaje', ''),
-                'phones': data.get('phones', []),
-                'social_media': {
-                    'facebook': data.get('social_media', {}).get('facebook', ''),
-                    'twitter': data.get('social_media', {}).get('twitter', ''),
-                    'linkedin': data.get('social_media', {}).get('linkedin', ''),
-                    'instagram': data.get('social_media', {}).get('instagram', ''),
-                    'youtube': data.get('social_media', {}).get('youtube', '')
-                },
-                'is_ecommerce': data.get('is_ecommerce', False)
-            }]
-
-            print("\nDatos formateados para BD:")
-            print(json.dumps(result_data, indent=2))
-
-            # Intentar la actualización
-            result = self.db.update_scraping_results(result_data)
-            print(f"Resultado de la actualización: {result}")
-
-            return result  # Retornar el resultado completo
-
+            
+            # Crear query de actualización
+            update_query = """
+            UPDATE sociedades 
+            SET 
+                url_exists = %s,
+                url_valida = %s,
+                url_limpia = %s,
+                url_status = %s,
+                url_status_mensaje = %s,
+                telefono_1 = %s,
+                telefono_2 = %s,
+                telefono_3 = %s,
+                facebook = %s,
+                twitter = %s,
+                linkedin = %s,
+                instagram = %s,
+                youtube = %s,
+                e_commerce = %s,
+                processed = TRUE,
+                fecha_actualizacion = NOW()
+            WHERE cod_infotel = %s
+            """
+            
+            # Preparar los parámetros
+            phones = data.get('phones', [])
+            phones = phones + ['', '', '']  # Asegurar que hay al menos 3 elementos
+            
+            social_media = data.get('social_media', {})
+            
+            params = (
+                data.get('url_exists', False),
+                data.get('url_valida', ''),
+                data.get('url_limpia', ''),
+                data.get('url_status', -1),
+                data.get('url_status_mensaje', ''),
+                phones[0],
+                phones[1],
+                phones[2],
+                social_media.get('facebook', ''),
+                social_media.get('twitter', ''),
+                social_media.get('linkedin', ''),
+                social_media.get('instagram', ''),
+                social_media.get('youtube', ''),
+                data.get('is_ecommerce', False),
+                company_id
+            )
+            
+            # Ejecutar query
+            with self.connection.cursor() as cursor:
+                cursor.execute(update_query, params)
+                
+                if cursor.rowcount > 0:
+                    self.connection.commit()
+                    print(f"✅ Empresa {company_id} actualizada exitosamente")
+                    return {
+                        "status": "success",
+                        "message": f"Empresa {company_id} actualizada exitosamente"
+                    }
+                else:
+                    print(f"⚠️ No se actualizó la empresa {company_id}. Posible error de ID.")
+                    return {
+                        "status": "error",
+                        "message": f"No se encontró la empresa con ID {company_id}"
+                    }
+                    
         except Exception as e:
-            print(f"❌ Error en update_company_data: {str(e)}")
-            logger.error(f"Error actualizando empresa {company_id}: {e}")
+            print(f"❌ Error actualizando empresa {company_id}: {str(e)}")
+            traceback.print_exc()
+            
+            if self.connection and not self.connection.closed:
+                self.connection.rollback()
+                
             return {
                 "status": "error",
                 "message": str(e)
             }
 
     def process_batch(self, limit: int = 100) -> Dict[str, Any]:
-        """Procesa un lote de empresas"""
-        print("\n>>> PUNTO DE CONTROL 6: Iniciando process_batch <<<")
+        """Procesa un lote de empresas siguiendo el flujo completo"""
         companies = self.get_companies_to_process(limit)
-        print(f"Empresas a procesar: {len(companies)}")
-
+        
         results = {
             'total': len(companies),
             'processed': 0,
             'successful': 0,
-            'failed': 0
+            'failed': 0,
+            'details': []
         }
-
+        
         for company in companies:
             try:
-                print(f"\n>>> PUNTO DE CONTROL 6.1: Llamando process_company para {company['cod_infotel']} <<<")
-
+                print(f"\nProcesando empresa: {company['razon_social']} (ID: {company['cod_infotel']})")
+                
+                # 1. Verificar la URL original
                 success, data = self.process_company(company)
-
-                print("\n>>> PUNTO DE CONTROL 8: Resultado de process_company <<<")
-                print(f"success: {success}")
-                print(f"data: {json.dumps(data, indent=2)}")
-
+                
                 if success:
-                    print("\n>>> PUNTO DE CONTROL 9: Intentando actualizar en BD <<<")
+                    # Actualizar en base de datos
                     update_result = self.update_company_data(company['cod_infotel'], data)
-                    print(f"Resultado actualización: {update_result}")
-
+                    
                     if update_result.get('status') == 'success':
                         results['successful'] += 1
-                        print("✅ Actualización exitosa")
+                        detail = {
+                            'cod_infotel': company['cod_infotel'],
+                            'razon_social': company['razon_social'],
+                            'success': True,
+                            'url': data.get('url_valida', None),
+                            'phones': len(data.get('phones', [])),
+                            'social_networks': sum(1 for v in data.get('social_media', {}).values() if v),
+                            'is_ecommerce': data.get('is_ecommerce', False)
+                        }
                     else:
                         results['failed'] += 1
-                        print(f"❌ Error en actualización: {update_result.get('message')}")
+                        detail = {
+                            'cod_infotel': company['cod_infotel'],
+                            'razon_social': company['razon_social'],
+                            'success': False,
+                            'error': update_result.get('message', 'Error al actualizar en BD')
+                        }
                 else:
+                    # Marcar como procesado pero sin éxito
+                    empty_data = {
+                        'cod_infotel': company['cod_infotel'],
+                        'url_exists': False,
+                        'url_status': -1,
+                        'url_status_mensaje': data.get('url_status_mensaje', 'URL no válida')
+                    }
+                    self.update_company_data(company['cod_infotel'], empty_data)
+                    
                     results['failed'] += 1
-                    print("❌ Procesamiento no exitoso")
-
+                    detail = {
+                        'cod_infotel': company['cod_infotel'],
+                        'razon_social': company['razon_social'],
+                        'success': False,
+                        'error': data.get('url_status_mensaje', 'URL no válida')
+                    }
+                
+                results['details'].append(detail)
+                
             except Exception as e:
-                print(f"\n❌ Error procesando empresa: {str(e)}")
+                print(f"❌ Error procesando empresa {company['cod_infotel']}: {str(e)}")
                 traceback.print_exc()
+                
                 results['failed'] += 1
+                results['details'].append({
+                    'cod_infotel': company['cod_infotel'],
+                    'razon_social': company['razon_social'],
+                    'success': False,
+                    'error': str(e)
+                })
+                
             finally:
                 results['processed'] += 1
-                print(f"\nProgreso: {results['processed']}/{results['total']}")
-
-        print("\n>>> PUNTO DE CONTROL 10: Resumen final <<<")
-        print(json.dumps(results, indent=2))
+                # Mostrar progreso
+                print(f"Progreso: {results['processed']}/{results['total']}")
+                
         return results
-    
 
 def main():
     # Usar la configuración de la base de datos desde config.py
-    db_params = {
-        'dbname': DB_CONFIG['database'],
-        'user': DB_CONFIG['user'],
-        'password': DB_CONFIG['password'],
-        'host': DB_CONFIG['host'],
-        'port': DB_CONFIG['port']
-    }
+    from config import DB_CONFIG
     
-    scraper = WebScrapingService(db_params)
-    results = scraper.process_batch(limit=100)
+    scraper = WebScrapingService(DB_CONFIG)
+    results = scraper.process_batch(limit=10)
     print(f"Resultados del procesamiento: {json.dumps(results, indent=2)}")
 
 if __name__ == "__main__":
