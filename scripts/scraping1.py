@@ -455,7 +455,7 @@ def verify_company_url(url, company_name, session, provincia=None, codigo_postal
         if codigo_postal_found:
             score += 20
         if nif_found:
-            score += 40
+            score += 100
         
         data['score'] = score
         print(f"Puntuación de verificación para {url}: {score}")
