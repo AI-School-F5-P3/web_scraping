@@ -1,4 +1,5 @@
 import concurrent
+from urllib.parse import urlparse
 import requests
 import re
 from urllib3.exceptions import InsecureRequestWarning
@@ -77,23 +78,35 @@ class WebScrapingService:
         - O la verificación falló (url_exists = FALSE)
         """
         try:
-            self.cursor.execute("""
+            query = """
                 SELECT cod_infotel, nif, razon_social, domicilio, 
                     cod_postal, nom_poblacion, nom_provincia, url
                 FROM sociedades 
-                WHERE processed = FALSE 
-                AND (
-                    (url IS NOT NULL AND url_exists IS NULL)
-                    OR url_exists = FALSE
-                )
+                WHERE url IS NOT NULL 
+                AND url != ''
+                AND processed = FALSE
                 LIMIT %s
-                FOR UPDATE SKIP LOCKED  -- Evita que otros procesos tomen las mismas filas
-            """, (limit,))
+            """
             
+            # Ejecutar la consulta y obtener los resultados
+            self.cursor.execute(query, (limit,))
+            results = self.cursor.fetchall()  # Obtener los resultados antes de cerrar el cursor
+            
+            # Obtener nombres de columnas
             columns = [desc[0] for desc in self.cursor.description]
-            return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+            
+            # Convertir a lista de diccionarios
+            companies = [dict(zip(columns, row)) for row in results]
+            
+            print(f"\nEmpresas encontradas para procesar: {len(companies)}")
+            for company in companies[:5]:
+                print(f"- {company['razon_social']}: {company['url']}")
+                
+            return companies
+            
         except Exception as e:
             logger.error(f"Error obteniendo empresas: {e}")
+            print(f"Error al obtener empresas: {e}")
             return []
 
     def process_company(self, company: Dict) -> Dict:
@@ -287,6 +300,10 @@ class WebScrapingService:
     
     def verify_company_url(self, url: str, company: Dict) -> Tuple[bool, Dict]:
         """Verifica una URL específica y extrae información"""
+        print(f"\n{'='*50}")
+        print(f"Procesando empresa: {company['razon_social']}")
+        print(f"URL original: {url}")
+        
         session = requests.Session()
         retry_strategy = Retry(
             total=1,
@@ -298,15 +315,8 @@ class WebScrapingService:
         session.mount("https://", adapter)
         
         try:
-            # Estructura inicial de datos que incluye campos de BD y análisis
+            # Estructura inicial de datos
             data = {
-                # Campos para análisis interno
-                'title': '',
-                'meta_description': '',
-                'h1': '',
-                'score': 0,
-                
-                # Campos para la base de datos
                 'cod_infotel': company['cod_infotel'],
                 'url_exists': False,
                 'url_valida': None,
@@ -324,96 +334,82 @@ class WebScrapingService:
                 'is_ecommerce': False
             }
 
+            # Asegurar que la URL tenga protocolo
+            if not url.startswith(('http://', 'https://')):
+                url = 'https://' + url
+            print(f"URL normalizada: {url}")
+
+            # Verificar si la URL existe (DNS lookup)
+            domain = urlparse(url).netloc
+            if domain.startswith('www.'):
+                base_domain = domain[4:]
+            else:
+                base_domain = domain
+                
+            print(f"Verificando dominio: {base_domain}")
+            try:
+                dns.resolver.resolve(base_domain, 'A')
+                print("✅ Dominio válido (DNS)")
+                domain_exists = True
+            except:
+                try:
+                    dns.resolver.resolve('www.' + base_domain, 'A')
+                    print("✅ Dominio válido (DNS con www)")
+                    domain_exists = True
+                except:
+                    print("❌ Dominio no válido")
+                    domain_exists = False
+
+            if not domain_exists:
+                data.update({
+                    'url_status': -1,
+                    'url_status_mensaje': "Dominio no válido"
+                })
+                return False, data
+
+            # Intentar obtener el contenido
+            print("Intentando obtener contenido de la página...")
             content = self.get_page_content(url, session)
+            
             if not content:
+                print("❌ No se pudo obtener contenido")
                 data.update({
                     'url_status': -1,
                     'url_status_mensaje': "No se pudo acceder a la URL"
                 })
                 return False, data
 
+            print("✅ Contenido obtenido correctamente. URL válida!")
+            
+            # Si llegamos aquí, la URL es válida y accesible
             soup = BeautifulSoup(content, 'html.parser')
             
-            # Extraer información básica
+            # Extraer información
             data.update({
-                'title': soup.title.string.lower() if soup.title else '',
-                'meta_description': soup.find('meta', {'name': 'description'})['content'].lower() 
-                    if soup.find('meta', {'name': 'description'}) else '',
-                'h1': ' '.join([h1.text.lower() for h1 in soup.find_all('h1')]),
                 'url_exists': True,
-                'url_status': 200
-            })
-            
-            # Extraer teléfonos y redes sociales
-            data['phones'] = self.extract_phones(soup)
-            social_links = self.extract_social_links(soup)
-            data['social_media'].update(social_links)
-            
-            # Detectar e-commerce
-            is_ecommerce, ecommerce_data = self.detect_ecommerce(soup)
-            data['is_ecommerce'] = is_ecommerce
-            
-            # Verificar datos de la empresa
-            company_verification = self.verify_company_data(soup, company)
-            
-            # Calcular puntuación total
-            score = 0
-            
-            # Puntos por verificación de datos de empresa
-            if company_verification.get('provincia_en_web'):
-                score += 15  # Provincia encontrada
-            if company_verification.get('cp_en_web'):
-                score += 30  # Código postal encontrado
-            if company_verification.get('nif_en_web'):
-                score += 100  # NIF encontrado (identificación inequívoca)
-            
-            # Puntos por teléfonos encontrados
-            if data['phones']:
-                score += 15
-                print(f"Teléfonos encontrados: {len(data['phones'])} (+15 puntos)")
-            
-            # Puntos por redes sociales
-            social_points = len([link for link in data['social_links'].values() if link]) * 5
-            if social_points:
-                score += social_points
-                print(f"Redes sociales encontradas: {social_points//5} (+{social_points} puntos)")
-            
-            # Puntos por e-commerce
-            if data['has_ecommerce']:
-                score += 10
-                print(f"E-commerce detectado (+10 puntos)")
-            
-            # Puntos por marca principal
-            text_to_search = f"{data['title']} {data['meta_description']} {data['h1']}"
-            search_terms = self.clean_company_name(company['razon_social']).split('-')
-            main_brand = search_terms[0] if search_terms else ""
-            
-            if main_brand and main_brand in text_to_search:
-                if main_brand in data['title'] or main_brand in data['meta_description']:
-                    score += 40
-                    print(f"Marca principal '{main_brand}' encontrada en título/meta (+40 puntos)")
-            else:
-                matches = sum(1 for term in search_terms if term in text_to_search)
-                brand_points = int((matches / len(search_terms)) * 25)
-                score += brand_points
-                print(f"Términos de marca encontrados: {matches}/{len(search_terms)} (+{brand_points} puntos)")
-            
-            data['score'] = score
-            print(f"\nPuntuación total para {url}: {score} puntos")
-            
-            # Una URL se considera válida si:
-            # - Tiene el NIF (100 puntos) o
-            # - Acumula al menos 60 puntos de otras fuentes
-            is_valid = score >= 60
-            data.update({
-                'url_valida': url if is_valid else None,
-                'score': score,
-                'url_status_mensaje': f"Score: {score}. {'URL válida' if is_valid else 'Score insuficiente'}"
+                'url_valida': url,
+                'url_status': 200,
+                'url_status_mensaje': "URL válida y accesible"
             })
 
-            return is_valid, data
+            # Extraer teléfonos
+            data['phones'] = self.extract_phones(soup)
+            print(f"Teléfonos encontrados: {len(data['phones'])}")
+
+            # Extraer redes sociales
+            social_links = self.extract_social_links(soup)
+            data['social_media'].update(social_links)
+            print(f"Redes sociales encontradas: {len([v for v in social_links.values() if v])}")
+
+            # Detectar ecommerce
+            is_ecommerce, ecommerce_data = self.detect_ecommerce(soup)
+            data['is_ecommerce'] = is_ecommerce
+            print(f"E-commerce detectado: {is_ecommerce}")
+
+            return True, data
             
         except Exception as e:
+            print(f"❌ Error procesando URL: {str(e)}")
             logger.error(f"Error verificando URL {url}: {e}")
             data.update({
                 'url_status': -1,
