@@ -26,9 +26,7 @@ HARDWARE_CONFIG = {
     "max_workers": int(os.getenv("MAX_WORKERS", "8")),
     "gpu_enabled": os.getenv("GPU_ENABLED", "True").lower() in ["true", "1"],
     "cuda_visible_devices": os.getenv("CUDA_VISIBLE_DEVICES", "0"),
-    "chrome_options": os.getenv("CHROME_OPTIONS", "DEFAULT_CHROME_OPTIONS")
-}
-DEFAULT_CHROME_OPTIONS = [
+    "chrome_options": [
         "--headless",
         "--no-sandbox",
         "--disable-gpu",
@@ -38,6 +36,7 @@ DEFAULT_CHROME_OPTIONS = [
         "--ignore-certificate-errors",
         "--disable-software-rasterizer"
     ]
+}
 
 # Lista oficial de provincias españolas
 PROVINCIAS_ESPANA = [
@@ -88,9 +87,12 @@ REQUIRED_COLUMNS = [
 
 # Timeouts y reintentos
 TIMEOUT_CONFIG = {
-    "request_timeout": 30,
-    "retry_attempts": 3,
-    "retry_delay": 5
+    'connect_timeout': 10,        # segundos para establecer conexión
+    'read_timeout': 20,           # segundos para lectura
+    'request_timeout': 30,        # timeout general
+    'retry_count': 3,             # número de reintentos
+    'retry_delay': 5,             # retraso base entre reintentos (segundos)
+    'retry_backoff_factor': 0.5   # factor multiplicador para retroceso exponencial
 }
 
 # Estados de URL
@@ -104,4 +106,21 @@ URL_STATUS_MESSAGES = {
     500: "Error Interno del Servidor",
     503: "Servicio No Disponible",
     504: "Tiempo de Espera Agotado"
+}
+
+
+# Configuración para el scraping
+SCRAPING_CONFIG = {
+    'max_urls_per_company': 10,       # Máximo número de URLs alternativas a verificar
+    'max_parallel_requests': 4,       # Máximo número de solicitudes paralelas
+    'rate_limit_per_minute': 30,      # Máximo número de solicitudes por minuto
+    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'
+}
+
+# Configuración para la validación de datos
+VALIDATION_CONFIG = {
+    'max_url_length': 255,
+    'max_company_name_length': 255,
+    'valid_phone_prefixes': ['+34', '+1', '+44', '+33', '+49'],
+    'valid_domains': ['.es', '.com', '.net', '.org', '.cat', '.eu', '.gal', '.eus']
 }
