@@ -1,5 +1,6 @@
 # app.py
 
+import traceback
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -16,6 +17,10 @@ import re
 import unicodedata
 import subprocess
 from scraping_flow import WebScrapingService
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 class EnterpriseApp:
     def __init__(self):
         self.init_session_state()
@@ -437,83 +442,111 @@ class EnterpriseApp:
                 ["Scrapy con LLM AngelM", "Scrapy con scrapy-Jhon", "Scrapy con scrapy-AngelS"],
                 index=0
             )
-            if st.button("Ejecutar Scraping"):
-                if scraping_option == "Scrapy con LLM AngelM":
+            if scraping_option == "Scrapy con LLM AngelM":
+                if st.button("Ejecutar Scraping", key="btn_angelm"):
                     st.info("Esta opción aún no está implementada.")
-                elif scraping_option == "Scrapy con scrapy-Jhon":
+            elif scraping_option == "Scrapy con scrapy-Jhon":
+                if st.button("Ejecutar Scraping", key="btn_jhon"):
                     st.info("Ejecutando scrapy de John")
                     self.process_scraping(limit)  # Mantiene la lógica existente
                     st.success("Scraping con scrapy-Jhon completado.")
-                elif scraping_option == "Scrapy con scrapy-AngelS":
+            elif scraping_option == "Scrapy con scrapy-AngelS":
+                if st.button("Ejecutar Scraping Completo", key="btn_angels"):
                     try:
-                        st.info("Iniciando proceso de scraping...")
-                        progress_bar = st.progress(0)
-                        status_text = st.empty()
-                        
-                        # Inicializar el servicio de scraping con la configuración de BD
+                        # Inicializar scraper
                         from scraping_flow import WebScrapingService
                         scraper = WebScrapingService(DB_CONFIG)
                         
-                        # Obtener empresas y mostrar información inicial
-                        companies = scraper.get_companies_to_process(limit=limit)
-                        total_companies = len(companies)
-                        
-                        st.write(f"Encontradas {total_companies} empresas para procesar")
-                        
-                        if total_companies == 0:
-                            st.warning("No hay empresas pendientes de procesar.")
-                            return
+                        # Paso 1: Obtener empresas
+                        with st.spinner("Obteniendo empresas..."):
+                            companies = scraper.get_companies_to_process(limit)
                             
-                        # Mostrar algunas empresas de ejemplo
-                        st.write("Ejemplos de empresas a procesar:")
-                        for company in companies[:5]:
-                            st.write(f"- {company['razon_social']}: {company['url']}")
-                            
-                        processed = 0
-                        successful = 0
-                        
-                        # Procesar cada empresa
-                        for company in companies:
-                            try:
-                                status_text.text(f"Procesando: {company['razon_social']}")
+                            if not companies:
+                                st.warning("No hay empresas pendientes de procesar")
+                            else:
+                                st.success(f"Se encontraron {len(companies)} empresas para procesar")
                                 
-                                # Verificar la URL
-                                url = company['url']
-                                is_valid, data = scraper.verify_company_url(url, company)
+                                # Mostrar tabla de empresas
+                                df = pd.DataFrame(companies)
+                                st.dataframe(df[['cod_infotel', 'razon_social', 'url']])
                                 
-                                if is_valid:
-                                    successful += 1
-                                    st.write(f"✅ URL válida encontrada para {company['razon_social']}")
-                                else:
-                                    st.write(f"❌ URL no válida para {company['razon_social']}")
+                                # Paso 2: Procesar empresas
+                                st.write("### Procesando empresas...")
+                                
+                                # Crear contenedores para progreso
+                                progress_bar = st.progress(0)
+                                status_area = st.empty()
+                                results_area = st.container()
+                                
+                                # Procesar empresas
+                                successful = 0
+                                failed = 0
+                                
+                                for i, company in enumerate(companies):
+                                    try:
+                                        # Actualizar progreso
+                                        progress = i / len(companies)
+                                        progress_bar.progress(progress)
+                                        status_area.text(f"Procesando {i+1}/{len(companies)}: {company['razon_social']}")
+                                        
+                                        # Procesar empresa
+                                        with results_area:
+                                            st.write(f"🔍 Procesando: {company['razon_social']}")
+                                            
+                                        success, data = scraper.process_company(company)
+                                        
+                                        # Mostrar resultado
+                                        with results_area:
+                                            if success:
+                                                # Actualizar BD
+                                                update_result = scraper.update_company_data(company['cod_infotel'], data)
+                                                if update_result.get('status') == 'success':
+                                                    successful += 1
+                                                    st.success(f"✅ {company['razon_social']}: URL válida y datos extraídos")
+                                                else:
+                                                    failed += 1
+                                                    st.error(f"❌ {company['razon_social']}: Error actualizando BD")
+                                            else:
+                                                # Marcar como procesado
+                                                empty_data = {
+                                                    'cod_infotel': company['cod_infotel'],
+                                                    'url_exists': False,
+                                                    'url_status': -1,
+                                                    'url_status_mensaje': data.get('url_status_mensaje', "No se encontró URL válida")
+                                                }
+                                                scraper.update_company_data(company['cod_infotel'], empty_data)
+                                                
+                                                failed += 1
+                                                st.warning(f"⚠️ {company['razon_social']}: No se encontró URL válida")
                                     
-                                processed += 1
-                                progress_bar.progress(processed / total_companies)
+                                    except Exception as e:
+                                        with results_area:
+                                            failed += 1
+                                            st.error(f"❌ {company['razon_social']}: Error - {str(e)}")
+                                            print(f"Error procesando empresa {company['cod_infotel']}: {str(e)}")
                                 
-                            except Exception as e:
-                                st.error(f"Error procesando empresa {company['cod_infotel']}: {str(e)}")
-                                continue
-                        
-                        # Mostrar resumen final
-                        st.success(f"""
-                        Scraping completado:
-                        - Total procesadas: {processed}
-                        - URLs válidas encontradas: {successful}
-                        - Porcentaje de éxito: {(successful/processed*100):.2f}%
-                        """)
-                        
-                        # Mostrar métricas en columnas
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Total Procesadas", processed)
-                        with col2:
-                            st.metric("URLs Válidas", successful)
-                        with col3:
-                            st.metric("Tasa de Éxito", f"{(successful/processed*100):.1f}%")
-                            
+                                # Completar barra de progreso
+                                progress_bar.progress(1.0)
+                                status_area.text("✅ Procesamiento completado")
+                                
+                                # Mostrar resumen
+                                st.write("### Resumen Final")
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("Total Procesadas", len(companies))
+                                with col2:
+                                    st.metric("Exitosas", successful)
+                                with col3:
+                                    st.metric("Fallidas", failed)
+                    
                     except Exception as e:
                         st.error(f"Error en el proceso de scraping: {str(e)}")
-                        logger.error(f"Error en scraping: {str(e)}")
+                        print(f"Error en scraping: {str(e)}")
+                        import traceback
+                        traceback.print_exc()
+                   
+                        
+                       
                 
         if st.session_state.processing_status:
             st.progress(st.session_state.processing_status["progress"])
@@ -764,6 +797,184 @@ class EnterpriseApp:
         plt.setp(texts, size=10)
         ax.axis('equal')
         st.pyplot(fig)
+        
+    def run_enhanced_scraping(self, limit: int):
+        """
+        Ejecuta el proceso de scraping mejorado con el nuevo flujo completo:
+        1. Verificar URL original
+        2. Si no funciona, generar URLs alternativas
+        3. Elegir la mejor URL y hacer scraping
+        4. Guardar resultados en BD
+        """
+        try:
+            st.subheader("🔍 Scraping Avanzado")
+            
+            # Inicializar el servicio de scraping
+            from scraping_flow import WebScrapingService
+            scraper = WebScrapingService(DB_CONFIG)
+            
+            # Información inicial
+            info_col1, info_col2 = st.columns(2)
+            
+            with info_col1:
+                st.info("""
+                **Flujo de trabajo:**
+                1. Verificar URL original
+                2. Si no funciona, generar URLs alternativas
+                3. Verificar y puntuar cada URL alternativa
+                4. Elegir la mejor URL y extraer datos
+                5. Guardar en base de datos
+                """)
+            
+            with info_col2:
+                st.info("""
+                **Datos extraídos:**
+                - Hasta 3 teléfonos
+                - Redes sociales (Facebook, Twitter, LinkedIn, Instagram, YouTube)
+                - Detección de e-commerce
+                - Estado de la URL
+                """)
+            
+            # Ejecutar el proceso
+            with st.spinner("Obteniendo empresas para procesar..."):
+                companies = scraper.get_companies_to_process(limit=limit)
+                total = len(companies)
+                
+                if total == 0:
+                    st.warning("⚠️ No hay empresas pendientes de procesar")
+                    return
+                
+                st.success(f"Se encontraron {total} empresas para procesar")
+                
+                # Mostrar tabla de empresas a procesar
+                companies_df = pd.DataFrame(companies)
+                st.write("Empresas a procesar:")
+                st.dataframe(companies_df[['cod_infotel', 'razon_social', 'url']])
+            
+            # Botón para confirmar
+            if not st.button("✅ Iniciar Procesamiento"):
+                return
+            
+            # Iniciar procesamiento con barra de progreso
+            progress = st.progress(0)
+            status_text = st.empty()
+            results_area = st.empty()
+            
+            results = {
+                'total': total,
+                'processed': 0,
+                'successful': 0,
+                'failed': 0,
+                'details': []
+            }
+            
+            # Procesar cada empresa
+            for i, company in enumerate(companies):
+                try:
+                    # Actualizar progreso
+                    progress.progress((i) / total)
+                    status_text.text(f"Procesando {i+1}/{total}: {company['razon_social']}")
+                    
+                    # Actualizar área de resultados con tabla en tiempo real
+                    if results['details']:
+                        results_df = pd.DataFrame(results['details'])
+                        results_area.dataframe(results_df)
+                    
+                    # Proceso principal
+                    success, data = scraper.process_company(company)
+                    
+                    if success:
+                        # Actualizar en base de datos
+                        update_result = scraper.update_company_data(company['cod_infotel'], data)
+                        
+                        if update_result.get('status') == 'success':
+                            results['successful'] += 1
+                            detail = {
+                                'cod_infotel': company['cod_infotel'],
+                                'razon_social': company['razon_social'],
+                                'estado': '✅ Completado',
+                                'url': data.get('url_valida', ''),
+                                'teléfonos': len(data.get('phones', [])),
+                                'redes_sociales': sum(1 for v in data.get('social_media', {}).values() if v),
+                                'e_commerce': '✓' if data.get('is_ecommerce', False) else '✗'
+                            }
+                        else:
+                            results['failed'] += 1
+                            detail = {
+                                'cod_infotel': company['cod_infotel'],
+                                'razon_social': company['razon_social'],
+                                'estado': '❌ Error BD',
+                                'error': update_result.get('message', '')
+                            }
+                    else:
+                        # Marcar como procesado pero sin éxito
+                        empty_data = {
+                            'cod_infotel': company['cod_infotel'],
+                            'url_exists': False,
+                            'url_status': -1,
+                            'url_status_mensaje': data.get('url_status_mensaje', 'URL no válida')
+                        }
+                        scraper.update_company_data(company['cod_infotel'], empty_data)
+                        
+                        results['failed'] += 1
+                        detail = {
+                            'cod_infotel': company['cod_infotel'],
+                            'razon_social': company['razon_social'],
+                            'estado': '❌ URL inválida',
+                            'error': data.get('url_status_mensaje', '')
+                        }
+                    
+                    results['details'].append(detail)
+                    results['processed'] += 1
+                    
+                except Exception as e:
+                    results['failed'] += 1
+                    results['processed'] += 1
+                    
+                    results['details'].append({
+                        'cod_infotel': company['cod_infotel'],
+                        'razon_social': company['razon_social'],
+                        'estado': '❌ Error',
+                        'error': str(e)
+                    })
+                    
+                    st.error(f"Error procesando empresa {company['razon_social']}: {str(e)}")
+            
+            # Completar barra de progreso
+            progress.progress(1.0)
+            status_text.text("✅ Procesamiento completado")
+            
+            # Mostrar resultados finales
+            st.subheader("📊 Resultados del Procesamiento")
+            
+            # Métricas
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("Total Procesadas", results['processed'])
+            with c2:
+                st.metric("Exitosas", results['successful'])
+            with c3:
+                success_rate = (results['successful'] / results['processed'] * 100) if results['processed'] > 0 else 0
+                st.metric("Tasa de Éxito", f"{success_rate:.1f}%")
+            
+            # Tabla final de resultados
+            if results['details']:
+                results_df = pd.DataFrame(results['details'])
+                st.dataframe(results_df)
+                
+                # Botón para descargar resultados
+                csv = results_df.to_csv(index=False)
+                st.download_button(
+                    label="📥 Descargar Resultados CSV",
+                    data=csv,
+                    file_name=f"scraping_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+                
+        except Exception as e:
+            st.error(f"❌ Error en el proceso de scraping: {str(e)}")
+            traceback.print_exc()
+
 
     def run(self):
         """Ejecuta la aplicación"""
