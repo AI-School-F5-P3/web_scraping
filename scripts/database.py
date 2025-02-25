@@ -8,6 +8,10 @@ from psycopg2.extras import execute_values
 from config import DB_CONFIG, HARDWARE_CONFIG, TIMEOUT_CONFIG
 import platform
 from db_validator import DataProcessor
+import logging
+
+logger = logging.getLogger(__name__)
+
 class DatabaseManager:
     def __init__(self):
         self.connection = psycopg2.connect(**DB_CONFIG)
@@ -256,6 +260,7 @@ class DatabaseManager:
             youtube VARCHAR(255),
             e_commerce BOOLEAN DEFAULT FALSE NOT NULL,
             processed BOOLEAN DEFAULT FALSE NOT NULL,  -- Nuevo campo
+            last_processed TIMESTAMP,                -- New column added
             fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             deleted BOOLEAN DEFAULT FALSE
         );
@@ -267,7 +272,7 @@ class DatabaseManager:
         try:
             self.execute_query(create_table_query, return_df=False)
         except Exception as e:
-            print(f"Error creating table: {e}")    
+            print(f"Error creating table: {e}")
             
     def reset_database(self):
         drop_query = "DROP TABLE IF EXISTS sociedades;"

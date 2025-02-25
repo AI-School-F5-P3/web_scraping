@@ -1,0 +1,71 @@
+/* style.css */
+
+/* Main container styling */
+.main {
+    padding: 2rem;
+}
+
+/* Sidebar styling with reduced spacing */
+.css-1d391kg {
+    padding: 1rem 0.5rem;
+}
+
+/* Reduce spacing between sidebar elements */
+.sidebar .element-container {
+    margin-bottom: 0.5rem !important;
+}
+
+/* Sidebar headers with less margin */
+.sidebar h1, .sidebar h2, .sidebar h3 {
+    margin-bottom: 0.5rem !important;
+    margin-top: 0.5rem !important;
+}
+
+/* Card-like containers */
+.stMetric {
+    background-color: #ffffff;
+    border-radius: 0.5rem;
+    padding: 1rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* Tab styling */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 2rem;
+    margin-bottom: 2rem;
+}
+
+.stTabs [data-baseweb="tab"] {
+    background-color: #f8f9fa;
+    border-radius: 0.5rem;
+    padding: 0.5rem 2rem;
+    font-weight: 500;
+}
+
+.stTabs [data-baseweb="tab"][aria-selected="true"] {
+    background-color: #642678;
+    color: white;
+}
+
+/* Button styling */
+.stButton > button {
+    width: 100%;
+    border-radius: 0.5rem;
+    padding: 0.5rem 1rem;
+    background-color: #1f77b4;
+    color: white;
+}
+
+.stButton > button:hover {
+    background-color: #155987;
+}
+
+/* Reduce spacing in selectbox */
+.stSelectbox {
+    margin-bottom: 0.5rem !important;
+}
+
+/* Change tab underline color to purple */
+.stTabs [data-baseweb="tab-highlight"] {
+    background-color: #642678 !important;
+}

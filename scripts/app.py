@@ -5,25 +5,29 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import time
-from agents import DBAgent, ScrapingAgent  # Removed OrchestratorAgent
-from database import DatabaseManager
-from scraping import ProWebScraper
-from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA, SQL_MODELS, SCRAPING_MODELS, DB_CONFIG
-from agents import CustomLLM
 import matplotlib.pyplot as plt
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 import unicodedata
-import subprocess
+import logging
+from agents import DBAgent, ScrapingAgent
+from database import DatabaseManager
+from scraping import ProWebScraper
+from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA, SQL_MODELS, SCRAPING_MODELS, DB_CONFIG
+from agents import CustomLLM
 from scraping_flow import WebScrapingService
+import os
+
+# Configure logger
+logger = logging.getLogger(__name__)
+
 class EnterpriseApp:
     def __init__(self):
         self.init_session_state()
         self.db = DatabaseManager()
         self.scraper = ProWebScraper()
         self.setup_agents()
-        self.load_data_from_db()
-        # Cargar datos de la BD si no hay nada en session_state
+        # Load data from DB if session_state is empty
         self.load_data_from_db()    
             
         # Enhanced page configuration
@@ -34,89 +38,21 @@ class EnterpriseApp:
             initial_sidebar_state="expanded"
         )
         
-        # Add custom CSS with adjusted sidebar spacing
-        st.markdown("""
-            <style>
-                /* Main container styling */
-                .main {
-                    padding: 2rem;
-                }
-                
-                /* Sidebar styling with reduced spacing */
-                .css-1d391kg {
-                    padding: 1rem 0.5rem;
-                }
-                
-                /* Reduce spacing between sidebar elements */
-                .sidebar .element-container {
-                    margin-bottom: 0.5rem !important;
-                }
-                
-                /* Sidebar headers with less margin */
-                .sidebar h1, .sidebar h2, .sidebar h3 {
-                    margin-bottom: 0.5rem !important;
-                    margin-top: 0.5rem !important;
-                }
-                
-                /* Card-like containers */
-                .stMetric {
-                    background-color: #ffffff;
-                    border-radius: 0.5rem;
-                    padding: 1rem;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                }
-                
-                /* Tab styling */
-                .stTabs [data-baseweb="tab-list"] {
-                    gap: 2rem;
-                    margin-bottom: 2rem;
-                }
-                
-                .stTabs [data-baseweb="tab"] {
-                    background-color: #f8f9fa;
-                    border-radius: 0.5rem;
-                    padding: 0.5rem 2rem;
-                    font-weight: 500;
-                }
-                
-                .stTabs [data-baseweb="tab"][aria-selected="true"] {
-                    background-color: #1f77b4;
-                    color: white;
-                }
-                
-                /* Button styling */
-                .stButton > button {
-                    width: 100%;
-                    border-radius: 0.5rem;
-                    padding: 0.5rem 1rem;
-                    background-color: #1f77b4;
-                    color: white;
-                }
-                
-                .stButton > button:hover {
-                    background-color: #155987;
-                }
-                
-                /* Reduce spacing in selectbox */
-                .stSelectbox {
-                    margin-bottom: 0.5rem !important;
-                }
-                
-                                /* Change tab underline color to purple (#642678) */
-                .stTabs [data-baseweb="tab-highlight"] {
-                    background-color: #642678 !important;
-                }
-                
-                /* Also update the active tab background to match */
-                .stTabs [data-baseweb="tab"][aria-selected="true"] {
-                    background-color: #642678;
-                    color: white;
-                }
-            </style>
-        """, unsafe_allow_html=True)
+        # Add custom CSS
+        self.apply_custom_styling()
+
+    def apply_custom_styling(self):
+        """Apply custom CSS styling to the app from an external file"""
+        css_file = os.path.join(os.path.dirname(__file__), 'styles.css')
+        
+        if os.path.exists(css_file):
+            with open(css_file, 'r') as file:
+                st.markdown(f"<style>{file.read()}</style>", unsafe_allow_html=True)
+        else:
+            st.warning("CSS file not found! Make sure `style.css` exists in the same directory.")
 
     def init_session_state(self):
-        """Inicializa variables de estado"""
+        """Initialize session state variables"""
         if "current_batch" not in st.session_state:
             st.session_state.current_batch = None
         if "processing_status" not in st.session_state:
@@ -132,17 +68,17 @@ class EnterpriseApp:
             st.session_state.scraping_model = list(SCRAPING_MODELS.keys())[0]
             
     def load_data_from_db(self):
-        """Si no hay datos en sesión, se cargan desde la BD"""
+        """Load data from database if session is empty"""
         if st.session_state.current_batch is None:
             df = self.db.execute_query("SELECT * FROM sociedades", return_df=True)
             if df is not None and not df.empty:
-                # Normalizar nombres de columnas a minúsculas
+                # Normalize column names to lowercase
                 df.columns = df.columns.str.strip().str.lower()
                 
-                # Asegurar limpieza de espacios en blanco
+                # Clean whitespace
                 df['nom_provincia'] = df['nom_provincia'].astype(str).str.strip()
                 
-                # Check for duplicates by a unique identifier (e.g., NIF or cod_infotel)
+                # Check for duplicates by unique identifier
                 if 'cod_infotel' in df.columns:
                     df = df.drop_duplicates(subset=['cod_infotel'], keep='first')
                 st.session_state.current_batch = {
@@ -153,9 +89,9 @@ class EnterpriseApp:
                 }
 
     def setup_agents(self):
-        """Configuración de agentes inteligentes teniendo en cuenta el modelo seleccionado"""
+        """Configure intelligent agents based on selected models"""
         try:
-            # Crear nuevas instancias de agentes con los modelos seleccionados
+            # Create new agent instances with selected models
             self.db_agent = DBAgent()
             modelo_sql = SQL_MODELS.get(st.session_state.sql_model, st.session_state.sql_model)
             self.db_agent.llm = CustomLLM(modelo_sql, provider="groq")
@@ -164,34 +100,28 @@ class EnterpriseApp:
             modelo_scraping = SCRAPING_MODELS.get(st.session_state.scraping_model, st.session_state.scraping_model)
             self.scraping_agent.llm = CustomLLM(modelo_scraping, provider="groq")
         except Exception as e:
-            st.error(f"Error al configurar agentes: {str(e)}")
+            st.error(f"Error setting up agents: {str(e)}")
 
     def render_sidebar(self):
-        """Renderiza la barra lateral con opciones de carga y filtros"""
+        """Render sidebar with loading options and filters"""
         with st.sidebar:
             st.image("images/logo.png", width=200)
             
             # Model Selection Section
-            st.subheader("🤖 Configuración de Modelos")
-            
-            # Diccionario de modelos SQL
-            sql_models = SQL_MODELS
+            st.subheader("🤖 Model Configuration")
             
             selected_sql_model = st.selectbox(
-                "Modelo para Consultas SQL",
-                list(sql_models.keys()),
+                "SQL Query Model",
+                list(SQL_MODELS.keys()),
                 index=0,
-                help="Selecciona el modelo Groq para consultas SQL"
+                help="Select Groq model for SQL queries"
             )
             
-            # Scraping model selection
-            scraping_models = SCRAPING_MODELS
-            
             selected_scraping_model = st.selectbox(
-                "Modelo para Web Scraping",
-                list(scraping_models.keys()),
+                "Web Scraping Model",
+                list(SCRAPING_MODELS.keys()),
                 index=0,
-                help="Selecciona el modelo para análisis de web scraping"
+                help="Select model for web scraping analysis"
             )
             
             # Update models if changed
@@ -204,11 +134,11 @@ class EnterpriseApp:
                 self.setup_agents()
             
             # File Upload Section
-            st.subheader("📤 Carga de Datos")
+            st.subheader("📤 Data Upload")
             uploaded_file = st.file_uploader(
-                "Seleccionar archivo (CSV/XLSX)",
+                "Select file (CSV/XLSX)",
                 type=["csv", "xlsx"],
-                help="Formatos soportados: CSV, Excel"
+                help="Supported formats: CSV, Excel"
             )
             
             if uploaded_file:
@@ -216,36 +146,35 @@ class EnterpriseApp:
             
             # Filters Section
             if st.session_state.current_batch:
-                st.subheader("🔍 Filtros")
+                st.subheader("🔍 Filters")
                 selected_provincia = st.selectbox(
-                    "Provincia",
-                    ["Todas"] + PROVINCIAS_ESPANA
+                    "Province",
+                    ["All"] + PROVINCIAS_ESPANA
                 )
                 
-                has_web = st.checkbox("Solo con web", value=False)
-                has_ecommerce = st.checkbox("Solo con e-commerce", value=False)
+                has_web = st.checkbox("Only with website", value=False)
+                has_ecommerce = st.checkbox("Only with e-commerce", value=False)
                 
-                if st.button("Aplicar Filtros"):
+                if st.button("Apply Filters"):
                     self.apply_filters(selected_provincia, has_web, has_ecommerce)
             
             # Database Reset Button
-            # Database Reset Button
-            if st.button("Borrar BBDD", help="Reinicia la base de datos"):
+            if st.button("Reset Database", help="Reset the database"):
                 self.db.reset_database()
                 st.session_state.current_batch = None
-                st.success("Base de datos reiniciada exitosamente.")
+                st.success("Database reset successfully.")
                 st.rerun()
 
     def render_main_content(self):
-        """Renderiza el contenido principal con UI mejorada"""
-        st.title("Sistema de Análisis Empresarial 🏢")
+        """Render main content with improved UI"""
+        st.title("Business Analysis System 🏢")
         
         # Enhanced tabs with custom styling and icons
         tabs = st.tabs([
             "📊  DASHBOARD  ",
-            "🔍  CONSULTAS  ",
+            "🔍  QUERIES  ",
             "🌐  WEB SCRAPING  ",
-            "📈  ANÁLISIS  "
+            "📈  ANALYSIS  "
         ])
         
         with tabs[0]:
@@ -258,25 +187,25 @@ class EnterpriseApp:
             self.render_analysis()
 
     def handle_file_upload(self, file):
-        """Procesa la carga de archivos y actualiza la BD, ignorando duplicados silenciosamente"""
+        """Process file upload and update database, silently ignoring duplicates"""
         try:
-            with st.spinner("Procesando archivo..."):
-                # Leer archivo
+            with st.spinner("Processing file..."):
+                # Read file
                 if file.name.endswith('.csv'):
                     df = pd.read_csv(file, header=0, sep=';', encoding='utf-8')
                 else:
                     df = pd.read_excel(file, header=0)
                     
-                # Validar columnas
+                # Validate columns
                 missing_cols = [col for col in REQUIRED_COLUMNS if col not in df.columns]
                 if missing_cols:
-                    st.error(f"Faltan columnas requeridas: {', '.join(missing_cols)}")
+                    st.error(f"Missing required columns: {', '.join(missing_cols)}")
                     return
                 
-                # Normalizar nombres de columnas
+                # Normalize column names
                 df.columns = [col.strip().lower() for col in df.columns]
 
-                # Obtener registros existentes para comparación
+                # Get existing records for comparison
                 existing_records = self.db.execute_query(
                     "SELECT cod_infotel FROM sociedades WHERE deleted = FALSE",
                     return_df=True
@@ -285,66 +214,66 @@ class EnterpriseApp:
                 if existing_records is not None and not existing_records.empty:
                     existing_codes = set(existing_records['cod_infotel'].values)
                     
-                    # Filtrar solo los registros que no existen en la BD
+                    # Filter out records that already exist in the DB
                     df = df[~df['cod_infotel'].isin(existing_codes)]
                     
                     if len(df) == 0:
-                        st.info("No hay nuevos registros para procesar. Todos los registros ya existen en la base de datos.")
+                        st.info("No new records to process. All records already exist in the database.")
                         return
 
-                # Limpiar datos antes de guardar
+                # Clean data before saving
                 df = df.replace(r'^\s*$', None, regex=True)
                 df = df.replace({np.nan: None})
                 
-                # Guardar en base de datos
+                # Save to database
                 result = self.db.save_batch(df, check_duplicates=True)
                 
                 if result["status"] == "success":
-                    st.success(f"✅ Archivo procesado exitosamente: {result['inserted']} nuevos registros añadidos")
-                    # Recargar datos de la BD para actualizar el dashboard
+                    st.success(f"✅ File processed successfully: {result['inserted']} new records added")
+                    # Reload data from DB to update the dashboard
                     self.load_data_from_db()
                 elif result["status"] == "partial":
                     st.warning(
-                        f"⚠️ Procesamiento parcial: {result['inserted']}/{result['total']} registros. "
-                        f"Errores: {'; '.join(result['errors'])}"
+                        f"⚠️ Partial processing: {result['inserted']}/{result['total']} records. "
+                        f"Errors: {'; '.join(result['errors'])}"
                     )
                 else:
-                    st.error(f"❌ Error al procesar archivo: {result['message']}\nDetalles: {result['errors']}")
+                    st.error(f"❌ Error processing file: {result['message']}\nDetails: {result['errors']}")
                     
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
-            st.error(f"❌ Error al procesar archivo: {str(e)}\n\nDetalles:\n{error_details}")
+            st.error(f"❌ Error processing file: {str(e)}\n\nDetails:\n{error_details}")
 
     def render_dashboard(self):
-        """Renderiza el dashboard con datos de la BD"""
-        # Obtener datos actualizados de la BD
+        """Render dashboard with DB data"""
+        # Get updated data from DB
         df = self.db.execute_query("SELECT * FROM sociedades WHERE deleted = FALSE", return_df=True)
         
         if df is None or df.empty:
-            st.info("👆 No hay datos en la base de datos. Carga un archivo para ver las estadísticas")
+            st.info("👆 No data in database. Upload a file to see statistics")
             return
 
-        # Normalizar nombres de columnas
+        # Normalize column names
         df.columns = df.columns.str.strip().str.lower()
         
         # Enhanced metrics display
-        st.markdown("### 📊 Estadísticas Generales")
+        st.markdown("### 📊 General Statistics")
         metrics_container = st.container()
         col1, col2, col3, col4 = metrics_container.columns(4)
         
         with col1:
             st.metric(
-                "Total Registros",
+                "Total Records",
                 f"{len(df):,}",
                 delta=None,
             )
         
-        # Contar URLs válidas (existentes y accesibles)
+        # Count valid URLs (existing and accessible)
         total_with_web = df['url_exists'].sum() if 'url_exists' in df.columns else 0
         with col2:
             st.metric(
-                "Con Web Activa",
+                "With Active Website",
                 f"{total_with_web:,}",
                 delta=f"{(total_with_web/len(df)*100):.1f}%" if len(df) > 0 else None
             )
@@ -352,51 +281,51 @@ class EnterpriseApp:
         unique_provinces = df['nom_provincia'].nunique()
         with col3:
             st.metric(
-                "Provincias",
+                "Provinces",
                 unique_provinces,
                 delta=None
             )
         
-        # Obtener la fecha de última actualización de la BD
+        # Get last update date from DB
         last_update = df['fecha_actualizacion'].max() if 'fecha_actualizacion' in df.columns else None
         with col4:
             st.metric(
-                "Última actualización",
-                last_update.strftime("%d-%m-%Y") if last_update else "No disponible"
+                "Last update",
+                last_update.strftime("%d-%m-%Y") if last_update else "Not available"
             )
         
         # Enhanced charts section
-        st.markdown("### 📈 Visualización de Datos")
+        st.markdown("### 📈 Data Visualization")
         chart_col1, chart_col2 = st.columns(2)
         
         with chart_col1:
-            st.markdown("#### Distribución por Provincia")
+            st.markdown("#### Distribution by Province")
             prov_counts = df['nom_provincia'].value_counts().head(10)
             fig, ax = plt.subplots(figsize=(10, 6))
-            bars = ax.bar(prov_counts.index, prov_counts.values)
+            ax.bar(prov_counts.index, prov_counts.values)
             plt.xticks(rotation=45, ha='right')
-            plt.title("Top 10 Provincias")
+            plt.title("Top 10 Provinces")
             st.pyplot(fig)
             
         with chart_col2:
-            st.markdown("#### Estado de URLs")
+            st.markdown("#### URL Status")
             self.render_url_status_chart(df)
 
     def render_queries(self):
-        """Renderiza la sección de consultas (SQL)"""
-        st.subheader("🔍 Consultas Avanzadas (SQL)")
+        """Render queries section (SQL)"""
+        st.subheader("🔍 Advanced Queries (SQL)")
 
         query = st.text_area(
-            "Escribe tu consulta en lenguaje natural",
-            placeholder="Ejemplo: Dame las 10 primeras empresas de Madrid",
-            help="Se traducirá a una consulta SQL"
+            "Write your query in natural language",
+            placeholder="Example: Give me the first 10 companies in Madrid",
+            help="Will be translated to an SQL query"
         )
 
         col1, col2 = st.columns([1, 4])
         with col1:
-            execute_button = st.button("Ejecutar Consulta")
+            execute_button = st.button("Execute Query")
         with col2:
-            st.checkbox("Mostrar SQL", value=False, key="show_sql")
+            st.checkbox("Show SQL", value=False, key="show_sql")
         
         if execute_button and query:
             self.process_query(query)
@@ -409,158 +338,262 @@ class EnterpriseApp:
                 
         # Show explanation if available
         if last_query and "explanation" in last_query and last_query["explanation"]:
-            with st.expander("Explicación LLM"):
+            with st.expander("LLM Explanation"):
                 st.write(last_query["explanation"])
 
     def render_scraping(self):
-        """Renderiza la sección de web scraping"""
+        """Render web scraping section"""
         st.subheader("🌐 Web Scraping")
         
         if st.session_state.current_batch is None:
             self.load_data_from_db()
         
         if not st.session_state.current_batch:
-            st.warning("⚠️ Primero debes cargar un archivo con URLs")
+            st.warning("⚠️ You must first upload a file with URLs")
             return
+
+        # Check for existing results from previous run
+        if "scraping_results" in st.session_state:
+            with st.container():
+                st.success("Previous scraping batch completed")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total Processed", st.session_state.scraping_results.get("processed", 0))
+                with col2:
+                    st.metric("Valid URLs", st.session_state.scraping_results.get("successful", 0))
+                with col3:
+                    st.metric("Failed URLs", st.session_state.scraping_results.get("failed", 0))
+                with col4:
+                    success_rate = (st.session_state.scraping_results.get("successful", 0) / 
+                                st.session_state.scraping_results.get("processed", 1) * 100)
+                    st.metric("Success Rate", f"{success_rate:.1f}%")
+            
+            # Add a separator
+            st.markdown("---")
         
-        col1, col2 = st.columns(2)
-        with col1:
-            limit = st.number_input(
-                "Límite de URLs a procesar",
-                min_value=1,
-                max_value=1000,
-                value=50
-            )
-        with col2:
-            scraping_option = st.selectbox(
-                "Selecciona el método de scraping:",
-                ["Scrapy con LLM AngelM", "Scrapy con scrapy-Jhon", "Scrapy con scrapy-AngelS"],
-                index=0
-            )
-            if st.button("Ejecutar Scraping"):
-                if scraping_option == "Scrapy con LLM AngelM":
-                    st.info("Esta opción aún no está implementada.")
-                elif scraping_option == "Scrapy con scrapy-Jhon":
-                    st.info("Ejecutando scrapy de John")
-                    self.process_scraping(limit)  # Mantiene la lógica existente
-                    st.success("Scraping con scrapy-Jhon completado.")
-                elif scraping_option == "Scrapy con scrapy-AngelS":
-                    try:
-                        st.info("Iniciando proceso de scraping...")
-                        progress_bar = st.progress(0)
-                        status_text = st.empty()
-                        
-                        # Inicializar el servicio de scraping con la configuración de BD
-                        from scraping_flow import WebScrapingService
-                        scraper = WebScrapingService(DB_CONFIG)
-                        
-                        # Obtener empresas y mostrar información inicial
-                        companies = scraper.get_companies_to_process(limit=limit)
-                        total_companies = len(companies)
-                        
-                        st.write(f"Encontradas {total_companies} empresas para procesar")
-                        
-                        if total_companies == 0:
-                            st.warning("No hay empresas pendientes de procesar.")
-                            return
-                            
-                        # Mostrar algunas empresas de ejemplo
-                        st.write("Ejemplos de empresas a procesar:")
-                        for company in companies[:5]:
-                            st.write(f"- {company['razon_social']}: {company['url']}")
-                            
-                        processed = 0
-                        successful = 0
-                        
-                        # Procesar cada empresa
-                        for company in companies:
-                            try:
-                                status_text.text(f"Procesando: {company['razon_social']}")
-                                
-                                # Verificar la URL
-                                url = company['url']
-                                is_valid, data = scraper.verify_company_url(url, company)
-                                
-                                if is_valid:
-                                    successful += 1
-                                    st.write(f"✅ URL válida encontrada para {company['razon_social']}")
-                                else:
-                                    st.write(f"❌ URL no válida para {company['razon_social']}")
-                                    
-                                processed += 1
-                                progress_bar.progress(processed / total_companies)
-                                
-                            except Exception as e:
-                                st.error(f"Error procesando empresa {company['cod_infotel']}: {str(e)}")
-                                continue
-                        
-                        # Mostrar resumen final
-                        st.success(f"""
-                        Scraping completado:
-                        - Total procesadas: {processed}
-                        - URLs válidas encontradas: {successful}
-                        - Porcentaje de éxito: {(successful/processed*100):.2f}%
-                        """)
-                        
-                        # Mostrar métricas en columnas
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Total Procesadas", processed)
-                        with col2:
-                            st.metric("URLs Válidas", successful)
-                        with col3:
-                            st.metric("Tasa de Éxito", f"{(successful/processed*100):.1f}%")
-                            
-                    except Exception as e:
-                        st.error(f"Error en el proceso de scraping: {str(e)}")
-                        logger.error(f"Error en scraping: {str(e)}")
+        # Layout with two columns
+        with st.container():
+            col1, col2 = st.columns(2)
+            with col1:
+                # Get remaining count to help user decide limit
+                scraper = WebScrapingService(DB_CONFIG)
+                remaining = self.get_remaining_count()
                 
-        if st.session_state.processing_status:
-            st.progress(st.session_state.processing_status["progress"])
-            st.write(f"Procesando: {st.session_state.processing_status['current_url']}")
+                limit = st.slider(
+                    "URLs to process",
+                    min_value=1,
+                    max_value=min(500, max(50, remaining)),
+                    value=min(50, remaining),
+                    step=5,
+                    help=f"Select number of URLs to process (remaining: {remaining})"
+                )
+            with col2:
+                execute = st.button("Execute Scraping", use_container_width=True)
+        
+        if execute:
+            try:
+                st.info("Starting scraping process...")
+                
+                # Create containers for progress, status, and details
+                progress_container = st.container()
+                with progress_container:
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    details_expander = st.expander("Process Details", expanded=False)
+                
+                results_container = st.container()
+                
+                # Initialize scraping service with DB config
+                scraper = WebScrapingService(DB_CONFIG)
+                
+                # Get companies to process according to limit
+                companies = scraper.get_companies_to_process(limit=limit)
+                total_companies = len(companies)
+                
+                if total_companies == 0:
+                    st.warning("No companies pending to process.")
+                    return
+                
+                with progress_container:
+                    st.write(f"Found {total_companies} companies to process")
+                    with details_expander:
+                        st.write("Companies to process:")
+                        for i, company in enumerate(companies[:10]):
+                            url_status = f": {company['url']}" if company.get('url') else ": [No URL]"
+                            st.write(f"- {company['razon_social']}{url_status}")
+                            if i >= 9 and len(companies) > 10:
+                                st.write(f"... and {len(companies) - 10} more")
+                                break
+                
+                # Initialize counters and result lists
+                processed = 0
+                successful = 0
+                failed = 0
+                successful_results = []
+                failed_results = []
+                
+                # Process each company
+                for i, company in enumerate(companies):
+                    try:
+                        company_name = company['razon_social']
+                        status_text.text(f"Processing {i+1}/{total_companies}: {company_name}")
+                        
+                        # Process company data
+                        result = scraper.process_company(company)
+                        
+                        # Save result and update counters
+                        if result['url_exists']:
+                            successful += 1
+                            successful_results.append(result)
+                            with details_expander:
+                                st.write(f"✅ {company_name}: Valid URL - {result['url_limpia']}")
+                            if result.get('phones'):
+                                with details_expander:
+                                    st.write(f"   📱 Phones: {len(result['phones'])}")
+                            if any(result.get('social_media', {}).values()):
+                                with details_expander:
+                                    social_count = sum(1 for v in result.get('social_media', {}).values() if v)
+                                    st.write(f"   🔗 Social media: {social_count}")
+                        else:
+                            failed += 1
+                            failed_results.append(result)
+                            with details_expander:
+                                st.write(f"❌ {company_name}: {result['url_status_mensaje']}")
+                        
+                        # Update database in real time
+                        update_success = scraper.save_results(result)
+                        if not update_success:
+                            with details_expander:
+                                st.write(f"⚠️ Error saving data for {company_name}")
+                                
+                    except Exception as e:
+                        failed += 1
+                        failed_results.append({
+                            'cod_infotel': company['cod_infotel'],
+                            'url_exists': False,
+                            'url_limpia': company.get('url'),
+                            'url_status': -1,
+                            'url_status_mensaje': f"Error: {str(e)}"
+                        })
+                        with details_expander:
+                            st.write(f"❌ Error processing {company_name}: {str(e)}")
+                    
+                    processed += 1
+                    progress_bar.progress(processed / total_companies)
+                
+                # Store results in session state for future reference
+                st.session_state.scraping_results = {
+                    "processed": processed,
+                    "successful": successful,
+                    "failed": failed,
+                    "success_rate": (successful / processed * 100) if processed > 0 else 0,
+                    "successful_results": successful_results,
+                    "failed_results": failed_results
+                }
+                
+                # Display final metrics and results
+                with results_container:
+                    st.success("Scraping process completed")
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Total Processed", processed)
+                    with col2:
+                        st.metric("Valid URLs", successful)
+                    with col3:
+                        st.metric("Failed URLs", failed)
+                    with col4:
+                        success_rate = (successful / processed * 100) if processed > 0 else 0
+                        st.metric("Success Rate", f"{success_rate:.1f}%")
+                    
+                    if successful_results:
+                        with st.expander("Successfully Processed URLs", expanded=True):
+                            success_df = pd.DataFrame([{
+                                'Company': i+1,
+                                'URL': r['url_limpia'],
+                                'Phones': len(r.get('phones', [])),
+                                'Social Media': sum(1 for v in r.get('social_media', {}).values() if v),
+                                'E-Commerce': '✓' if r.get('is_ecommerce') else '✗'
+                            } for i, r in enumerate(successful_results)])
+                            st.dataframe(success_df, use_container_width=True)
+                    
+                    if failed_results:
+                        with st.expander("Failed URLs", expanded=True):
+                            fail_df = pd.DataFrame([{
+                                'Company': i+1,
+                                'URL': r.get('url_limpia'),
+                                'Status': r.get('url_status'),
+                                'Message': r.get('url_status_mensaje')
+                            } for i, r in enumerate(failed_results)])
+                            st.dataframe(fail_df, use_container_width=True)
+                
+                # Check if there are more companies to process
+                remaining = self.get_remaining_count()
+                
+                # Continue processing section
+                st.markdown("---")
+                st.subheader("Continue Processing")
+                
+                if remaining > 0:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        next_limit = st.slider(
+                            "Companies to process next",
+                            min_value=1,
+                            max_value=min(500, remaining),
+                            value=min(50, remaining),
+                            step=5,
+                            key="next_limit"
+                        )
+                    with col2:
+                        st.write(f"Remaining companies: {remaining}")
+                        if st.button(f"Process Next Batch", key="continue_processing"):
+                            # Clear previous results and rerun with new limit
+                            limit = next_limit
+                            st.rerun()
+                else:
+                    st.success("🎉 All companies have been processed.")
+            
+            except Exception as e:
+                st.error(f"Error in scraping process: {str(e)}")
+                logger.error(f"Scraping error: {str(e)}")
+                
+    def get_remaining_count(self):
+        """Get the count of remaining companies to process"""
+        try:
+            query = "SELECT COUNT(*) FROM sociedades WHERE processed = FALSE"
+            result = self.db.execute_query(query, return_df=True)
+            if result is not None and not result.empty:
+                return result.iloc[0, 0]
+            return 0
+        except Exception as e:
+            logger.error(f"Error getting remaining count: {e}")
+            return 0
 
     def render_analysis(self):
-        """Renderiza la sección de análisis"""
-        st.subheader("📈 Análisis de Datos")
+        """Render analysis section"""
+        st.subheader("📈 Data Analysis")
         
         if not st.session_state.current_batch:
-            st.warning("⚠️ Carga datos para realizar análisis")
+            st.warning("⚠️ Load data to perform analysis")
             return
         
         analysis_type = st.selectbox(
-            "Tipo de Análisis",
+            "Analysis Type",
             [
-                "Distribución Geográfica",
-                "Análisis de E-commerce",
-                "Presencia Digital",
-                "Contactabilidad"
+                "Geographic Distribution",
+                "E-commerce Analysis",
+                "Digital Presence",
+                "Contactability"
             ]
         )
         
-        if st.button("Generar Análisis"):
+        if st.button("Generate Analysis"):
             self.generate_analysis(analysis_type)
-            
-    def remove_accents(self, text):
-        """Elimina acentos de una cadena de texto."""
-        return ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
-
-    def is_count_query(self, query):
-        """Detecta si la consulta del usuario es una consulta de conteo."""
-        query_normalized = self.remove_accents(query.lower())
-
-        # Patrón para detectar frases relacionadas con conteo
-        count_patterns = [
-            r"\bcuantas\b", 
-            r"\bcuantos\b", 
-            r"\bnumero de\b", 
-            r"\btotal de\b"
-        ]
-        
-        return any(re.search(pattern, query_normalized) for pattern in count_patterns)
 
     def process_query(self, query: str):
+        """Process a natural language query to SQL and execute it"""
         try:
-            with st.spinner("Procesando consulta..."):
+            with st.spinner("Processing query..."):
                 # Generate query
                 query_info = self.db_agent.generate_query(query)
                 
@@ -572,126 +605,47 @@ class EnterpriseApp:
                 # Execute query
                 results = self.db.execute_query(query_info["query"], return_df=True)
                 
+                # Store results in session state
+                st.session_state.last_query = {
+                    "query": query,
+                    "sql": query_info["query"],
+                    "query_type": query_info["query_type"],
+                    "results": results,
+                    "explanation": query_info.get("explanation", "")
+                }
+                
                 # Handle different query types
                 if query_info["query_type"] == "count":
                     value = results.iloc[0, 0]
                     st.metric("Total", f"{value:,}")
                 elif query_info["query_type"] == "aggregate":
                     st.dataframe(results)
-                    # Add visualization if needed
                 else:
                     st.dataframe(results)
-                
-                # Show SQL if requested
-                if st.session_state.show_sql:
-                    st.code(query_info["query"], language="sql")
                     
-                # Show explanation
-                if query_info["explanation"]:
-                    with st.expander("Explicación"):
-                        st.write(query_info["explanation"])
-                        
         except Exception as e:
-            st.error(f"Error al procesar consulta: {str(e)}")
-            
-    
-            
-    def process_scraping(self, limit: int):
-        """Procesa el scraping de URLs utilizando procesamiento paralelo y muestra detalles."""
-        try:
-            urls_df = self.db.get_urls_for_scraping(limit=limit)
-            if urls_df.empty:
-                st.warning("No hay URLs pendientes de procesar")
-                return
-
-            total_urls = len(urls_df)
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            results = []
-
-            # Registrar tiempo de inicio
-            start_time = time.perf_counter()
-
-            def scrape_row(idx, row):
-                url_display = row['url'] if pd.notna(row['url']) else "URL no disponible"
-                result = self.scraping_agent.plan_scraping(row['url'])
-                # Añadir más información relevante al resultado
-                result.update({
-                    'cod_infotel': row['cod_infotel'],
-                    'original_url': row['url'],
-                    'phones_found': len(result.get('phones', [])),
-                    'social_media_found': len(result.get('social_media', {})),
-                    'has_ecommerce': result.get('is_ecommerce', False)
-                })
-                return idx, result
-
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                futures = {executor.submit(scrape_row, idx, row): idx for idx, row in urls_df.iterrows()}
-                completed = 0
-                for future in as_completed(futures):
-                    idx, result = future.result()
-                    results.append(result)
-                    completed += 1
-                    progress_bar.progress(completed / total_urls)
-                    status_text.text(f"Procesando URL {completed}/{total_urls}")
-            
-            end_time = time.perf_counter()
-            elapsed = end_time - start_time
-
-            # Mostrar resultados en formato más útil
-            st.subheader("Resultados del Web Scraping")
-            
-            # Métricas resumidas
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("URLs Procesadas", len(results))
-            with col2:
-                st.metric("Tiempo Total", f"{elapsed:.2f}s")
-            with col3:
-                st.metric("URLs Válidas", sum(1 for r in results if r.get('url_exists', False)))
-            with col4:
-                st.metric("Con E-commerce", sum(1 for r in results if r.get('has_ecommerce', False)))
-
-            # Tabla de resultados detallados
-            results_df = pd.DataFrame(results)
-            st.dataframe(
-                results_df[[
-                    'cod_infotel', 'original_url', 'url_exists', 
-                    'phones_found', 'social_media_found', 'has_ecommerce'
-                ]],
-                use_container_width=True,
-            )
-
-            # Preguntar al usuario si desea aplicar los cambios
-            if st.checkbox("Actualizar la base de datos con los nuevos datos"):
-                update_result = self.db.update_scraping_results(results=results)
-                st.success(f"✅ Scraping completado: {len(results)} URLs procesadas y BD actualizada.")
-            else:
-                st.info("No se actualizaron los registros en la BD.")
-                
-        except Exception as e:
-            st.error(f"❌ Error durante el scraping: {str(e)}")
+            st.error(f"Error processing query: {str(e)}")
 
     def generate_analysis(self, analysis_type: str):
-        """Genera análisis específicos"""
+        """Generate specific analyses"""
         try:
-            if analysis_type == "Distribución Geográfica":
+            if analysis_type == "Geographic Distribution":
                 self.show_geographic_analysis()
-            elif analysis_type == "Análisis de E-commerce":
+            elif analysis_type == "E-commerce Analysis":
                 self.show_ecommerce_analysis()
-            elif analysis_type == "Presencia Digital":
+            elif analysis_type == "Digital Presence":
                 self.show_digital_presence_analysis()
             else:
                 self.show_contactability_analysis()
         except Exception as e:
-            st.error(f"Error generando análisis: {str(e)}")
+            st.error(f"Error generating analysis: {str(e)}")
 
     def apply_filters(self, provincia: str, has_web: bool, has_ecommerce: bool):
-        """Aplica filtros a los datos actuales"""
+        """Apply filters to current data"""
         try:
             df = st.session_state.current_batch['data'].copy()
             
-            if provincia != "Todas":
+            if provincia != "All":
                 df = df[df['nom_provincia'] == provincia]
                 
             if has_web:
@@ -701,52 +655,21 @@ class EnterpriseApp:
                 df = df[df['e_commerce'] == True]
                 
             st.session_state.current_batch['filtered_data'] = df
-            st.success("Filtros aplicados correctamente")
+            st.success("Filters applied successfully")
         except Exception as e:
-            st.error(f"Error aplicando filtros: {str(e)}")
+            st.error(f"Error applying filters: {str(e)}")
 
-    # Métodos placeholder para análisis
-    def show_geographic_analysis(self):
-        st.write("### Análisis Geográfico")
-        df = st.session_state.current_batch['data']
-        prov_counts = df['nom_provincia'].value_counts()
-        st.bar_chart(prov_counts)
-
-    def show_ecommerce_analysis(self):
-        st.write("### Análisis de E-commerce")
-        df = st.session_state.current_batch['data']
-        if 'e_commerce' in df.columns:
-            ecommerce_counts = df['e_commerce'].value_counts()
-            st.bar_chart(ecommerce_counts)
-        else:
-            st.info("No hay datos de e-commerce disponibles.")
-
-    def show_digital_presence_analysis(self):
-        st.write("### Presencia Digital")
-        df = st.session_state.current_batch['data']
-        presence = df['url'].notna().value_counts()
-        st.bar_chart(presence)
-
-    def show_contactability_analysis(self):
-        st.write("### Análisis de Contactabilidad")
-        df = st.session_state.current_batch['data']
-        if 'nif' in df.columns:
-            count_nif = df['nif'].notna().sum()
-            st.write(f"Empresas con NIF: {count_nif}")
-        else:
-            st.info("No hay datos de contacto disponibles.")
-            
     def render_url_status_chart(self, df):
-        """Renderiza el gráfico de estado de URLs usando datos de la BD"""
-        # Usar el campo url_exists de la BD
+        """Render URL status chart using DB data"""
+        # Use url_exists field from DB
         count_valid = df['url_exists'].sum() if 'url_exists' in df.columns else 0
         count_invalid = len(df) - count_valid
 
-        # Configurar los datos del gráfico
+        # Configure chart data
         counts = [count_valid, count_invalid]
         labels = [
-            f"URLs Activas\n({count_valid:,})",
-            f"URLs Inactivas\n({count_invalid:,})"
+            f"Active URLs\n({count_valid:,})",
+            f"Inactive URLs\n({count_invalid:,})"
         ]
         colors = ['#3498db', '#e74c3c']
 
@@ -759,14 +682,45 @@ class EnterpriseApp:
             startangle=90
         )
         
-        # Enhance the appearance of the pie chart
+        # Enhance pie chart appearance
         plt.setp(autotexts, size=9, weight="bold")
         plt.setp(texts, size=10)
         ax.axis('equal')
         st.pyplot(fig)
 
+    # Analysis methods
+    def show_geographic_analysis(self):
+        st.write("### Geographic Analysis")
+        df = st.session_state.current_batch['data']
+        prov_counts = df['nom_provincia'].value_counts()
+        st.bar_chart(prov_counts)
+
+    def show_ecommerce_analysis(self):
+        st.write("### E-commerce Analysis")
+        df = st.session_state.current_batch['data']
+        if 'e_commerce' in df.columns:
+            ecommerce_counts = df['e_commerce'].value_counts()
+            st.bar_chart(ecommerce_counts)
+        else:
+            st.info("No e-commerce data available.")
+
+    def show_digital_presence_analysis(self):
+        st.write("### Digital Presence")
+        df = st.session_state.current_batch['data']
+        presence = df['url'].notna().value_counts()
+        st.bar_chart(presence)
+
+    def show_contactability_analysis(self):
+        st.write("### Contactability Analysis")
+        df = st.session_state.current_batch['data']
+        if 'nif' in df.columns:
+            count_nif = df['nif'].notna().sum()
+            st.write(f"Companies with NIF: {count_nif}")
+        else:
+            st.info("No contact data available.")
+
     def run(self):
-        """Ejecuta la aplicación"""
+        """Run the application"""
         self.render_sidebar()
         self.render_main_content()
 
