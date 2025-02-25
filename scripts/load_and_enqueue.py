@@ -57,7 +57,7 @@ def load_and_enqueue(file_path, batch_size=1000, reset_queues=False):
         return_df=True
     )
     
-    if companies is None or companies.empty:
+    if companies is None or len(companies) == 0:
         logger.warning("No companies to process")
         return
     

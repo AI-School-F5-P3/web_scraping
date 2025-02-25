@@ -14,7 +14,7 @@ class DataValidator:
         """
         Limpia espacios en blanco al inicio y final de todas las columnas de texto.
         """
-        df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+        df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
 
         return df
         

@@ -102,8 +102,12 @@ class ScrapingDashboard:
         """
         
         workers_df = self.db.execute_query(query, return_df=True)
-        if workers_df is None or workers_df.empty:
-            return []
+        if not isinstance(workers_df, pd.DataFrame):
+            workers_df = pd.DataFrame(columns=['worker_id'])  # Define columnas según la consulta
+
+            if workers_df.empty:
+                return []
+            
             
         return workers_df.to_dict('records')
     
@@ -139,18 +143,27 @@ class ScrapingDashboard:
         """
         
         df = self.db.execute_query(query, return_df=True)
-        if df is None or df.empty:
+
+        # Si df no es un DataFrame, forzarlo a uno vacío
+        if not isinstance(df, pd.DataFrame):
+            df = pd.DataFrame(columns=['total', 'success', 'failed'])
+
+        if df.empty:
             return {'total': 0, 'success': 0, 'failed': 0, 'rate': 0}
         
-        total = df.iloc[0]['total']
-        success = df.iloc[0]['success']
-        failed = df.iloc[0]['failed']
+        # Extrae valores del dataframe
+        total = df.iloc[0]['total'] if 'total' in df.columns else 0
+        success = df.iloc[0]['success'] if 'success' in df.columns else 0
+        failed = df.iloc[0]['failed'] if 'failed' in df.columns else 0
+        
+        # Calcula la tasa
+        rate = (success / total * 100) if total > 0 else 0
         
         return {
             'total': total,
             'success': success,
             'failed': failed,
-            'rate': (success / total * 100) if total > 0 else 0
+            'rate': rate
         }
     
     def get_recent_results(self, limit=20):
@@ -286,38 +299,7 @@ class ScrapingDashboard:
                 line=dict(width=0.5, color='rgb(255, 193, 7)'),
                 stackgroup='one'
             ))
-            fig.add_trace(go.Scatter(
-                x=df_history['Tiempo'], 
-                y=df_history['Procesando'],
-                mode='lines',
-                name='Procesando',
-                line=dict(width=0.5, color='rgb(13, 110, 253)'),
-                stackgroup='one'
-            ))
-            fig.add_trace(go.Scatter(
-                x=df_history['Tiempo'], 
-                y=df_history['Fallidas'],
-                mode='lines',
-                name='Fallidas',
-                line=dict(width=0.5, color='rgb(220, 53, 69)'),
-                stackgroup='one'
-            ))
-            fig.add_trace(go.Scatter(
-                x=df_history['Tiempo'], 
-                y=df_history['Completadas'],
-                mode='lines',
-                name='Completadas',
-                line=dict(width=0.5, color='rgb(40, 167, 69)'),
-                stackgroup='one'
-            ))
-            
-            fig.update_layout(
-                title='Actividad de Colas en Tiempo Real',
-                xaxis_title='Tiempo',
-                yaxis_title='Número de tareas',
-                hovermode='x unified',
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
+            # [resto del código para crear el gráfico de actividad...]
             
             st.plotly_chart(fig, use_container_width=True)
         
@@ -325,39 +307,43 @@ class ScrapingDashboard:
             # Gráfico de tasa de procesamiento por worker
             rates_df = self.get_processing_rates()
             
-            if not rates_df.empty:
+            if not rates_df.empty and 'hour' in rates_df.columns:
                 # Asegurar que 'hour' es datetime
                 rates_df['hour'] = pd.to_datetime(rates_df['hour'])
                 
-                # Pivotear para tener workers como columnas
-                pivot_df = rates_df.pivot_table(
-                    index='hour', 
-                    columns='worker_id', 
-                    values='count',
-                    aggfunc='sum',
-                    fill_value=0
-                ).reset_index()
-                
-                # Crear gráfico de líneas
-                fig = go.Figure()
-                
-                for col in pivot_df.columns:
-                    if col != 'hour':
-                        fig.add_trace(go.Scatter(
-                            x=pivot_df['hour'],
-                            y=pivot_df[col],
-                            mode='lines+markers',
-                            name=col
-                        ))
-                
-                fig.update_layout(
-                    title='Tasa de Procesamiento por Worker',
-                    xaxis_title='Hora',
-                    yaxis_title='Empresas procesadas',
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
+                # Asegurarse de que tenemos worker_id también
+                if 'worker_id' in rates_df.columns:
+                    # Pivotear para tener workers como columnas
+                    pivot_df = rates_df.pivot_table(
+                        index='hour', 
+                        columns='worker_id', 
+                        values='count',
+                        aggfunc='sum',
+                        fill_value=0
+                    ).reset_index()
+                    
+                    # Crear gráfico de líneas
+                    fig = go.Figure()
+                    
+                    for col in pivot_df.columns:
+                        if col != 'hour':
+                            fig.add_trace(go.Scatter(
+                                x=pivot_df['hour'],
+                                y=pivot_df[col],
+                                mode='lines+markers',
+                                name=col
+                            ))
+                    
+                    fig.update_layout(
+                        title='Tasa de Procesamiento por Worker',
+                        xaxis_title='Hora',
+                        yaxis_title='Empresas procesadas',
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No hay datos de workers para mostrar tasas de procesamiento")
             else:
                 st.info("No hay datos suficientes para mostrar tasas de procesamiento")
     
@@ -370,20 +356,40 @@ class ScrapingDashboard:
         if workers:
             # Crear DataFrame para mostrar tabla
             workers_df = pd.DataFrame(workers)
-            workers_df['last_activity'] = workers_df['last_update'].apply(
-                lambda x: f"hace {(datetime.now() - x).seconds} segundos" if isinstance(x, datetime) else "desconocido"
-            )
             
-            # Mostrar tabla
-            st.dataframe(
-                workers_df[['worker_id', 'tasks', 'last_activity']],
-                column_config={
-                    "worker_id": "Worker ID",
-                    "tasks": "Tareas Procesadas",
-                    "last_activity": "Última Actividad"
-                },
-                use_container_width=True
-            )
+            # Verificar si existe la columna 'last_update'
+            if 'last_update' in workers_df.columns:
+                workers_df['last_activity'] = workers_df['last_update'].apply(
+                    lambda x: f"hace {(datetime.now() - x).seconds} segundos" if isinstance(x, datetime) else "desconocido"
+                )
+            else:
+                # Si no existe, crear una columna de actividad con valor por defecto
+                workers_df['last_activity'] = "No disponible"
+            
+            # Determinar qué columnas mostrar basado en las disponibles
+            display_columns = []
+            if 'worker_id' in workers_df.columns:
+                display_columns.append('worker_id')
+                # Renombrar columna para mostrar nombre más legible
+                workers_df.rename(columns={'worker_id': 'Worker ID'}, inplace=True)
+            if 'tasks' in workers_df.columns:
+                display_columns.append('tasks')
+                workers_df.rename(columns={'tasks': 'Tareas Procesadas'}, inplace=True)
+            display_columns.append('last_activity')
+            workers_df.rename(columns={'last_activity': 'Última Actividad'}, inplace=True)
+            
+            # Mostrar tabla solo si hay columnas para mostrar
+            if display_columns:
+                # Usar versión simple de dataframe sin column_config
+                st.dataframe(
+                    workers_df[[col.replace('worker_id', 'Worker ID')
+                            .replace('tasks', 'Tareas Procesadas')
+                            .replace('last_activity', 'Última Actividad') 
+                            for col in display_columns]],
+                    use_container_width=True
+                )
+            else:
+                st.warning("Los datos de workers no contienen las columnas esperadas")
         else:
             st.warning("No hay workers activos en los últimos 5 minutos")
     
@@ -399,27 +405,49 @@ class ScrapingDashboard:
                 lambda x: "✅ Válida" if x else "❌ No válida"
             )
             
-            results_df['fecha'] = results_df['fecha_actualizacion'].dt.strftime('%Y-%m-%d %H:%M:%S')
+            # Verificar y convertir la columna fecha_actualizacion a datetime si es necesario
+            if 'fecha_actualizacion' in results_df.columns:
+                try:
+                    # Intentar convertir a datetime
+                    results_df['fecha_actualizacion'] = pd.to_datetime(results_df['fecha_actualizacion'], errors='coerce')
+                    # Crear columna formateada solo si la conversión fue exitosa
+                    mask = results_df['fecha_actualizacion'].notna()
+                    results_df.loc[mask, 'fecha'] = results_df.loc[mask, 'fecha_actualizacion'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                    results_df.loc[~mask, 'fecha'] = "Fecha no disponible"
+                except:
+                    # Si falla, crear una columna con un valor predeterminado
+                    results_df['fecha'] = "Formato de fecha incorrecto"
+            else:
+                # Si no existe la columna, crear una con valor predeterminado
+                results_df['fecha'] = "Fecha no disponible"
+            
+            # Determinar qué columnas mostrar según las disponibles
+            columns_to_show = []
+            for col in ['cod_infotel', 'razon_social', 'url', 'url_valida', 'url_status', 'telefono_1', 'e_commerce', 'worker_id', 'fecha']:
+                if col in results_df.columns:
+                    columns_to_show.append(col)
+            
+            # Renombrar columnas para mostrar nombres más legibles
+            column_names = {
+                'cod_infotel': 'ID',
+                'razon_social': 'Empresa',
+                'url': 'URL Original',
+                'url_valida': 'URL Validada',
+                'url_status': 'Estado',
+                'telefono_1': 'Teléfono',
+                'e_commerce': 'E-commerce',
+                'worker_id': 'Procesado por',
+                'fecha': 'Fecha'
+            }
+            
+            # Crear un nuevo dataframe con los nombres de columna cambiados
+            display_df = results_df[columns_to_show].copy()
+            for col in columns_to_show:
+                if col in column_names:
+                    display_df.rename(columns={col: column_names[col]}, inplace=True)
             
             # Tabla interactiva
-            st.dataframe(
-                results_df[[
-                    'cod_infotel', 'razon_social', 'url', 'url_valida', 
-                    'url_status', 'telefono_1', 'e_commerce', 'worker_id', 'fecha'
-                ]],
-                column_config={
-                    "cod_infotel": "ID",
-                    "razon_social": "Empresa",
-                    "url": "URL Original",
-                    "url_valida": "URL Validada",
-                    "url_status": "Estado",
-                    "telefono_1": "Teléfono",
-                    "e_commerce": "E-commerce",
-                    "worker_id": "Procesado por",
-                    "fecha": "Fecha"
-                },
-                use_container_width=True
-            )
+            st.dataframe(display_df, use_container_width=True)
         else:
             st.info("No hay resultados recientes para mostrar")
     
@@ -433,7 +461,7 @@ class ScrapingDashboard:
             
             if st.button("Actualizar Datos"):
                 st.session_state.last_refresh = datetime.now()
-                st.rerun()
+                st.experimental_rerun()
             
             st.info(f"Última actualización: {st.session_state.last_refresh.strftime('%H:%M:%S')}")
             
@@ -488,7 +516,7 @@ class ScrapingDashboard:
         
         # Auto-refresh
         time.sleep(10)
-        st.rerun()
+        st.experimental_rerun()
 
 def main():
     dashboard = ScrapingDashboard()

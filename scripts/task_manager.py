@@ -7,21 +7,25 @@ import os
 from typing import List, Dict, Any, Optional
 from task import Task
 from redis_config import *
+from dotenv import load_dotenv
+import os
+# Cargar variables de entorno
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 class TaskManager:
     def __init__(self):
-        self.redis = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            password=REDIS_PASSWORD,
-            username=REDIS_USERNAME,
+       self.redis = redis.Redis(
+            host=os.getenv('REDIS_HOST'),
+            port=int(os.getenv('REDIS_PORT', 6379)),  # Asegurar que sea entero
+            password=os.getenv('REDIS_PASSWORD'),
+            username=os.getenv('REDIS_USERNAME', 'default'),
             decode_responses=True
         )
-        self.hostname = socket.gethostname()
-        self.worker_id = f"{self.hostname}_{os.getpid()}"
-        logger.info(f"Initialized TaskManager with worker ID: {self.worker_id}")
+        
+        
+       
     
     def enqueue_tasks(self, companies: List[Dict[str, Any]]) -> int:
         """Añade múltiples empresas a la cola de pendientes"""
