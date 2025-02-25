@@ -45,3 +45,6 @@ class Task:
         task.result = data.get("result")
         task.error = data.get("error")
         return task
+    
+    def get(self, attr, default=None):
+        return getattr(self, attr, default)

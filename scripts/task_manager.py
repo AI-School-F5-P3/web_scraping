@@ -15,14 +15,15 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 class TaskManager:
-    def __init__(self):
-       self.redis = redis.Redis(
+    def __init__(self, worker_id=None):
+        self.redis = redis.Redis(
             host=os.getenv('REDIS_HOST'),
             port=int(os.getenv('REDIS_PORT', 6379)),  # Asegurar que sea entero
             password=os.getenv('REDIS_PASSWORD'),
             username=os.getenv('REDIS_USERNAME', 'default'),
-            decode_responses=True
+            decode_responses=True,
         )
+        self.worker_id = worker_id
         
         
        
