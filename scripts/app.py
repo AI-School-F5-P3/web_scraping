@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 import unicodedata
 import logging
-from agents import DBAgent, ScrapingAgent
+from agents import DBAgent
 from database import DatabaseManager
 from scraping import ProWebScraper
 from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA, SQL_MODELS, SCRAPING_MODELS, DB_CONFIG
@@ -95,10 +95,6 @@ class EnterpriseApp:
             self.db_agent = DBAgent()
             modelo_sql = SQL_MODELS.get(st.session_state.sql_model, st.session_state.sql_model)
             self.db_agent.llm = CustomLLM(modelo_sql, provider="groq")
-            
-            self.scraping_agent = ScrapingAgent()
-            modelo_scraping = SCRAPING_MODELS.get(st.session_state.scraping_model, st.session_state.scraping_model)
-            self.scraping_agent.llm = CustomLLM(modelo_scraping, provider="groq")
         except Exception as e:
             st.error(f"Error setting up agents: {str(e)}")
 

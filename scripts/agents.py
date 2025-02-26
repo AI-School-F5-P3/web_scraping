@@ -19,7 +19,7 @@ class CustomLLM(LLM):
     def __init__(self, model_name: str, provider: str = "groq"):
         super().__init__()
         self.model_name = model_name
-        self.temperature = 0.7
+        self.temperature = 0.2
         self.max_tokens = 2000
         self.provider = provider.lower()
         self.gpu_config = {
@@ -79,7 +79,7 @@ class DBAgent:
     ALLOWED_COLUMNS = [
         'cod_infotel', 'nif', 'razon_social', 'domicilio', 'cod_postal',
         'nom_poblacion', 'nom_provincia', 'url', 'e_commerce',
-        'telefono_1', 'telefono_2', 'telefono_3'
+        'telefono_1', 'telefono_2', 'telefono_3', 'facebook', 'twitter', 'linkedin', 'youtube'
     ]
 
     # Keywords that indicate a query is not database-related
@@ -94,29 +94,31 @@ class DBAgent:
         'instagram', 'tiktok', 'redes sociales'
     ]
 
-    PROMPT = """Eres un Arquitecto SQL Senior especializado en análisis empresarial. Tu tarea es generar consultas SQL precisas para la base de datos 'guardarail' o identificar cuando una consulta no está relacionada con la base de datos.
+    PROMPT = """You are a Senior SQL Architect specialized in business analytics. Your task is to generate precise SQL queries for the 'guardarail' database or to determine when a query is not database-related. 
 
-INPUT: Consulta en lenguaje natural
-OUTPUT: JSON con la siguiente estructura:
+INPUT: Natural language query
+OUTPUT: A JSON object with the following structure:
 {
     "query": "SQL query",
-    "explanation": "Explicación de la consulta",
+    "explanation": "Explanation of the query",
     "query_type": "count|table|aggregate|non_db",
-    "error": "Mensaje de error si aplica"
+    "error": "Error message if applicable"
 }
 
-REGLAS IMPORTANTES:
-1. Si la consulta no está relacionada con empresas o la base de datos (ej: tiempo, noticias):
-   - Establecer query_type: "non_db"
-   - Establecer error: "Esta consulta no está relacionada con la base de datos de empresas"
+IMPORTANT RULES:
+1. If the query is not related to companies or the database (e.g., weather, news):
+   - Set query_type: "non_db"
+   - Set error: "This query is not related to the company database"
+   
+2. For proportion/percentage queries:
+   - Use query_type: "aggregate"
+   - Generate a WITH query to calculate percentages
 
-2. Para consultas de proporción/porcentaje:
-   - Usar query_type: "aggregate"
-   - Generar consulta WITH para calcular porcentajes
+3. For social media queries:
+   - Indicate that social media information is not available currently.
+   - Suggest consulting available data (URL, e-commerce).
 
-3. Para consultas sobre redes sociales:
-   - Indicar que esta información no está disponible actualmente
-   - Sugerir consultar datos disponibles (URL, e-commerce)
+Please answer in Spanish.
 
 EJEMPLOS DE MANEJO DE CASOS ESPECIALES:
 
@@ -351,82 +353,3 @@ Output: {
             parts.append("con e-commerce")
             
         return " ".join(parts)
-
-class ScrapingAgent:
-    PROMPT = """Eres un Ingeniero de Web Scraping Elite especializado en análisis empresarial. Tu tarea es la siguiente:
-1. Si se dispone de una URL válida para una empresa:
-   - Extrae información clave de la web, tales como:
-     • Teléfonos (verificados).
-     • Redes sociales (Facebook, Twitter, LinkedIn, Instagram, YouTube).
-     • Indicador de presencia de e-commerce.
-   - Valida la información extraída usando técnicas de scraping (HTML estático y/o dinámico) y documenta los pasos utilizados.
-2. Si la empresa no tiene URL:
-   - Sugiere una URL candidata basándote en la razón social y en posibles combinaciones de su nombre.
-   - Una vez sugerida la URL, procede a extraer la misma información que en el caso anterior.
-3. Aplica técnicas avanzadas de anti-detección:
-   - Rotación de User-Agents, manejo de cookies y CAPTCHAs, delays aleatorios.
-4. Devuelve un plan de scraping estructurado en formato JSON que contenga:
-   - "strategy": "static" o "dynamic" (según la naturaleza de la web).
-   - "steps": una lista de pasos detallados para el scraping.
-   - "estimated_resources": un objeto con indicadores como "cpu_intensive", "gpu_needed" y "memory_required".
-   
-Utiliza un lenguaje claro, conciso y enfocado en la extracción de datos relevantes para análisis empresarial."""
-    
-    def __init__(self):
-        self.llm = None
-    
-    def plan_scraping(self, url: str) -> dict:
-        """
-        Returns a more meaningful scraping plan with actual functionality.
-        """
-        if not url or pd.isna(url):
-            # Implement URL discovery based on company name
-            return {
-                "strategy": "url_discovery",
-                "steps": ["Buscar URL basada en nombre empresa"],
-                "phones": [],
-                "social_media": {},
-                "is_ecommerce": False,
-                "url_exists": False
-            }
-        
-        try:
-            # Use ProWebScraper for actual scraping
-            scraper = ProWebScraper(use_proxies=False)
-            result = scraper.scrape_url(url, {})
-            
-            # If URL exists but couldn't be accessed, increase the timeout
-            if result and not result.get('url_exists', False):
-                # Try again with increased timeout
-                scraper.chrome_options.set_page_load_timeout(60)
-                result = scraper.scrape_url(url, {})
-            
-            return {
-                "strategy": "dynamic" if result.get('is_ecommerce') else "static",
-                "steps": [
-                    "Verificación de URL",
-                    "Extracción de teléfonos",
-                    "Búsqueda de redes sociales",
-                    "Detección de e-commerce"
-                ],
-                "phones": result.get('phones', []),
-                "social_media": result.get('social_media', {}),
-                "is_ecommerce": result.get('is_ecommerce', False),
-                "url_exists": result.get('url_exists', False)
-            }
-        except Exception as e:
-            return {
-                "strategy": "failed",
-                "steps": [f"Error: {str(e)}"],
-                "phones": [],
-                "social_media": {},
-                "is_ecommerce": False,
-                "url_exists": False
-            }
-    
-    def _estimate_resources(self, url: str) -> dict:
-        return {
-            "cpu_intensive": True if "javascript" in url.lower() else False,
-            "gpu_needed": True if "javascript" in url.lower() else False,
-            "memory_required": "high" if "javascript" in url.lower() else "low"
-        }
