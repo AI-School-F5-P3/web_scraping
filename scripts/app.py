@@ -35,6 +35,8 @@ class EnterpriseApp:
         self.db = DatabaseManager()
         self.scraper = ProWebScraper()
         self.setup_agents()
+        # Initialize the scraping dashboard
+        self.scraping_dashboard = ScrapingDashboard(use_sidebar=False)
         # Load data from DB if session_state is empty
         self.load_data_from_db()    
         
@@ -66,6 +68,9 @@ class EnterpriseApp:
             st.session_state.sql_model = list(SQL_MODELS.keys())[0]
         if "scraping_model" not in st.session_state:
             st.session_state.scraping_model = list(SCRAPING_MODELS.keys())[0]
+        # Add active tab tracking
+        if "active_tab" not in st.session_state:
+            st.session_state.active_tab = 0
             
     def load_data_from_db(self):
         """Load data from database if session is empty"""
@@ -103,68 +108,91 @@ class EnterpriseApp:
         with st.sidebar:
             st.image("images/logo.png", width=200)
             
-            # Model Selection Section
-            st.subheader("🤖 Model Configuration")
+            # Get the current active tab
+            active_tab = st.session_state.active_tab
             
-            selected_sql_model = st.selectbox(
-                "SQL Query Model",
-                list(SQL_MODELS.keys()),
-                index=0,
-                help="Select Groq model for SQL queries"
-            )
-            
-            # Update models if changed
-            if selected_sql_model != st.session_state.sql_model:
-                st.session_state.sql_model = selected_sql_model
-                self.setup_agents()
-            
-            # File Upload Section
-            st.subheader("📤 Data Upload")
-            uploaded_file = st.file_uploader(
-                "Select file (CSV/XLSX)",
-                type=["csv", "xlsx"],
-                help="Supported formats: CSV, Excel"
-            )
-            
-            if uploaded_file:
-                self.handle_file_upload(uploaded_file)
-            
-            # Filters Section
-            if st.session_state.current_batch:
-                st.subheader("🔍 Filters")
-                selected_provincia = st.selectbox(
-                    "Province",
-                    ["All"] + PROVINCIAS_ESPANA
+            # Show different sidebar content based on active tab
+            if active_tab == 2:  # Web Scraping tab is active
+                self.render_scraping_sidebar()
+            else:
+                # Model Selection Section
+                st.subheader("🤖 Model Configuration")
+                
+                selected_sql_model = st.selectbox(
+                    "SQL Query Model",
+                    list(SQL_MODELS.keys()),
+                    index=0,
+                    help="Select Groq model for SQL queries"
                 )
                 
-                has_web = st.checkbox("Only with website", value=False)
-                has_ecommerce = st.checkbox("Only with e-commerce", value=False)
+                # Update models if changed
+                if selected_sql_model != st.session_state.sql_model:
+                    st.session_state.sql_model = selected_sql_model
+                    self.setup_agents()
                 
-                if st.button("Apply Filters"):
-                    self.apply_filters(selected_provincia, has_web, has_ecommerce)
-            
-            # Database Reset Button
-            if st.button("Reset Database", help="Reset the database"):
-                self.db.reset_database()
-                st.session_state.current_batch = None
-                st.success("Database reset successfully.")
-                st.rerun()
+                # File Upload Section
+                st.subheader("📤 Data Upload")
+                uploaded_file = st.file_uploader(
+                    "Select file (CSV/XLSX)",
+                    type=["csv", "xlsx"],
+                    help="Supported formats: CSV, Excel"
+                )
+                
+                if uploaded_file:
+                    self.handle_file_upload(uploaded_file)
+                
+                # Filters Section
+                if st.session_state.current_batch:
+                    st.subheader("🔍 Filters")
+                    selected_provincia = st.selectbox(
+                        "Province",
+                        ["All"] + PROVINCIAS_ESPANA
+                    )
+                    
+                    has_web = st.checkbox("Only with website", value=False)
+                    has_ecommerce = st.checkbox("Only with e-commerce", value=False)
+                    
+                    if st.button("Apply Filters"):
+                        self.apply_filters(selected_provincia, has_web, has_ecommerce)
+                
+                # Database Reset Button
+                if st.button("Reset Database", help="Reset the database"):
+                    self.db.reset_database()
+                    st.session_state.current_batch = None
+                    st.success("Database reset successfully.")
+                    st.rerun()
+                    
+    def render_scraping_sidebar(self):
+        """Render sidebar controls for the scraping dashboard"""
+        # We're directly calling the dashboard's sidebar control rendering method
+        self.scraping_dashboard._render_sidebar_controls()
 
     def render_main_content(self):
         st.title("Business Analysis System 🏢")
         
-        # Solo 3 pestañas: Dashboard, Queries y Web Scraping
-        tabs = st.tabs([
-            "📊  DASHBOARD  ",
-            "🔍  QUERIES  ",
-            "🌐  WEB SCRAPING  "
-        ])
+        # Use a radio button that looks like tabs
+        tab_options = ["📊  DASHBOARD  ", "🔍  QUERIES  ", "🌐  WEB SCRAPING  "]
         
-        with tabs[0]:
+        # Get the previously selected tab
+        prev_tab_index = st.session_state.active_tab
+        
+        # Add the radio selector for tabs
+        selected_tab = st.radio("", tab_options, index=prev_tab_index, horizontal=True, key="tab_selector")
+        
+        # Map selection to index
+        tab_index = tab_options.index(selected_tab)
+        
+        # Force a rerun if the tab has changed
+        if tab_index != prev_tab_index:
+            st.session_state.active_tab = tab_index
+            st.experimental_rerun()
+        
+        # Display content based on selected tab
+        if tab_index == 0:
             self.render_dashboard()
-        with tabs[1]:
+        elif tab_index == 1:
             self.render_queries()
-        with tabs[2]:
+        else:
             self.render_scraping()
 
     def handle_file_upload(self, file):
@@ -333,21 +361,25 @@ class EnterpriseApp:
                 st.write(last_query["explanation"])
 
     def render_scraping(self):
-        """Render web scraping section with Supabase integration"""
+        """Render web scraping section with integrated dashboard"""
         st.subheader("🌐 Web Scraping")
         
-        st.info("Este módulo integra la funcionalidad de scraping con Supabase. Pulsa el botón para iniciar el proceso.")
+        # Option to start or stop the dashboard
+        if "dashboard_running" not in st.session_state:
+            st.session_state.dashboard_running = False
         
-        # Botón para iniciar el scraping basado en Supabase (dashboard)
-        if st.button("Start Scraping with Supabase"):
-            # Importa la clase del dashboard (asegúrate de que dashboard.py esté en el mismo directorio o en el path)
-            from dashboard import ScrapingDashboard
-            
-            # Instanciar y ejecutar el dashboard
-            dashboard_instance = ScrapingDashboard()
-            dashboard_instance.run()
+        if not st.session_state.dashboard_running:
+            st.info("Este módulo integra la funcionalidad de scraping con Supabase. Pulsa el botón para iniciar el proceso.")
+            if st.button("Iniciar Scraping con Supabase"):
+                st.session_state.dashboard_running = True
+                st.experimental_rerun()
         else:
-            st.write("Pulsa el botón para iniciar el proceso de scraping.")
+            if st.button("Detener Dashboard"):
+                st.session_state.dashboard_running = False
+                st.experimental_rerun()
+            
+            # Run the dashboard without its sidebar (we're using our own in the main app)
+            self.scraping_dashboard.run()
                 
     def get_remaining_count(self):
         """Get the count of remaining companies to process"""

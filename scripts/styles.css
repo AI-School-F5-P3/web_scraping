@@ -33,6 +33,8 @@
 .stTabs [data-baseweb="tab-list"] {
     gap: 2rem;
     margin-bottom: 2rem;
+    justify-content: center; /* Center the tabs */
+    width: 100%; /* Ensure the container takes full width */
 }
 
 .stTabs [data-baseweb="tab"] {
@@ -40,11 +42,51 @@
     border-radius: 0.5rem;
     padding: 0.5rem 2rem;
     font-weight: 500;
+    min-width: 150px; /* Set a minimum width for each tab */
+    text-align: center; /* Center the text inside tabs */
 }
 
 .stTabs [data-baseweb="tab"][aria-selected="true"] {
     background-color: #642678;
     color: white;
+}
+
+/* Radio buttons as tabs styling */
+div.row-widget.stRadio > div {
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    gap: 2rem;
+    margin-bottom: 2rem;
+}
+
+div.row-widget.stRadio > div > label {
+    background-color: #f8f9fa;
+    border-radius: 0.5rem;
+    padding: 0.5rem 2rem;
+    font-weight: 500;
+    min-width: 150px;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Hide the actual radio button circle */
+div.row-widget.stRadio > div > label > div:first-child {
+    display: none;
+}
+
+/* Style for the selected radio button - THIS IS THE KEY PART */
+div.row-widget.stRadio > div > label:has(input:checked),
+div.row-widget.stRadio > div > label:has(input:checked) * {
+    background-color: #642678 !important;
+    color: white !important;
+}
+
+/* Additional styling to ensure the background color is applied */
+div.row-widget.stRadio > div > label:has(input:checked) span {
+    color: white !important;
 }
 
 /* Button styling */
@@ -68,4 +110,57 @@
 /* Change tab underline color to purple */
 .stTabs [data-baseweb="tab-highlight"] {
     background-color: #642678 !important;
+}
+
+    .metric-card {
+        background-color: #f9f9f9;
+        border-radius: 10px;
+        padding: 15px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        text-align: center;
+    }
+    .metric-value {
+        font-size: 36px;
+        font-weight: bold;
+        margin: 10px 0;
+    }
+    .metric-label {
+        font-size: 14px;
+        color: #666;
+    }
+    .success-metric {
+        color: #28a745;
+    }
+    .warning-metric {
+        color: #ffc107;
+    }
+    .danger-metric {
+        color: #dc3545;
+    }
+
+/* Styles of Web Scraping section */
+.metric-card {
+    background-color: #f9f9f9;
+    border-radius: 10px;
+    padding: 15px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    text-align: center;
+}
+.metric-value {
+    font-size: 36px;
+    font-weight: bold;
+    margin: 10px 0;
+}
+.metric-label {
+    font-size: 14px;
+    color: #666;
+}
+.success-metric {
+    color: #28a745;
+}
+.warning-metric {
+    color: #ffc107;
+}
+.danger-metric {
+    color: #dc3545;
 }
