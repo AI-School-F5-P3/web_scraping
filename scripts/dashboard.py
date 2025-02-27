@@ -124,11 +124,13 @@ class ScrapingDashboard:
         GROUP BY worker_id, DATE_TRUNC('hour', fecha_actualizacion)
         ORDER BY hour
         """
-        
         df = self.db.execute_query(query, return_df=True)
-        if df is None or df.empty:
-            return pd.DataFrame()
         
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        # Manejo para cuando no hay datos
+            return pd.DataFrame() 
+        
+             
         return df
     
     def get_success_rate(self):
@@ -179,7 +181,9 @@ class ScrapingDashboard:
         """
         
         df = self.db.execute_query(query, return_df=True)
-        if df is None or df.empty:
+        # Verificar si df es None, una lista o un DataFrame vacío
+        if df is None or isinstance(df, list) or (hasattr(df, 'empty') and df.empty):
+        # Manejo para cuando no hay datos o df es una lista
             return pd.DataFrame()
         
         return df
