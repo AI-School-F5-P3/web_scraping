@@ -459,26 +459,31 @@ class WebScrapingService:
     
     def choose_best_url(self, url_results: Dict[str, Dict]) -> Tuple[str, Dict]:
         """
-        Elige la mejor URL basada en puntuación
+        Elige la mejor URL basada en puntuación, solo considerando puntuaciones positivas
         """
         if not url_results:
             return None, {}
             
         # Encontrar la URL con la puntuación más alta
         best_url = None
-        best_score = -1
+        best_score = 0  # Inicializar en 0 para solo considerar puntuaciones positivas
         best_data = {}
         
         for url, data in url_results.items():
             score = data.get('score', 0)
             print(f"URL: {url} - Puntuación: {score}")
             
+            # Solo considerar URLs con puntuación positiva
             if score > best_score:
                 best_score = score
                 best_url = url
                 best_data = data
         
-        print(f"Mejor URL seleccionada: {best_url} con puntuación {best_score}")
+        if best_url:
+            print(f"Mejor URL seleccionada: {best_url} con puntuación {best_score}")
+        else:
+            print("No se encontró ninguna URL con puntuación positiva")
+        
         return best_url, best_data
 
     def score_website(self, url: str, soup: BeautifulSoup, company: Dict) -> int:
