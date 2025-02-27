@@ -59,6 +59,15 @@ class ScrapingDashboard:
         if 'last_refresh' not in st.session_state:
             st.session_state.last_refresh = datetime.now()
         
+        if 'refresh_counter' not in st.session_state:
+            st.session_state.refresh_counter = 0
+            
+        if 'auto_refresh' not in st.session_state:
+            st.session_state.auto_refresh = True
+            
+        if 'reset_confirmation' not in st.session_state:
+            st.session_state.reset_confirmation = False
+        
         if 'history' not in st.session_state:
             st.session_state.history = {
                 'timestamps': [],
@@ -67,6 +76,21 @@ class ScrapingDashboard:
                 'completed': [],
                 'failed': []
             }
+    
+    def increment_refresh_counter(self):
+        st.session_state.refresh_counter += 1
+        st.session_state.last_refresh = datetime.now()
+    
+    def toggle_auto_refresh(self):
+        st.session_state.auto_refresh = not st.session_state.auto_refresh
+    
+    def toggle_reset_confirmation(self):
+        st.session_state.reset_confirmation = not st.session_state.reset_confirmation
+        
+    def reset_queues(self):
+        self.task_manager.reset_queues()
+        st.session_state.reset_confirmation = False
+        self.increment_refresh_counter()
     
     def get_queue_stats(self):
         """Obtiene estadísticas de las colas"""
@@ -183,7 +207,49 @@ class ScrapingDashboard:
             return pd.DataFrame()
         
         return df
-    
+
+    def reload_pending_tasks(self):
+        """Recarga las tareas pendientes desde la base de datos"""
+        # Consulta para obtener todas las empresas no procesadas
+        query = """
+        SELECT cod_infotel, razon_social, url
+        FROM sociedades
+        WHERE processed = FALSE
+        """
+        
+        try:
+            # Obtener los datos
+            pending_tasks = self.db.execute_query(query, return_df=True)
+            
+            if pending_tasks is None or pending_tasks.empty:
+                st.session_state.task_reload_message = "No hay tareas pendientes para recargar"
+                self.increment_refresh_counter()
+                return 0
+                
+            # Enqueue cada tarea pendiente
+            count = 0
+            for index, row in pending_tasks.iterrows():
+                task_data = {
+                    "cod_infotel": row["cod_infotel"],
+                    "razon_social": row["razon_social"],
+                    "url": row["url"]
+                }
+                
+                # Agregar a la cola usando el task_manager
+                self.task_manager.enqueue_task(task_data)
+                count += 1
+            
+            # Agregar mensaje de éxito y actualizar contador (del nuevo código)
+            st.session_state.task_reload_message = f"Tareas pendientes recargadas correctamente ({count})"
+            self.increment_refresh_counter()
+            
+            return count
+            
+        except Exception as e:
+            st.error(f"Error al recargar tareas: {str(e)}")
+            self.increment_refresh_counter()
+            return -1   
+        
     def render_metrics_section(self):
         """Renderiza sección de métricas principales"""
         st.markdown("## 📊 Métricas en Tiempo Real")
@@ -299,7 +365,37 @@ class ScrapingDashboard:
                 line=dict(width=0.5, color='rgb(255, 193, 7)'),
                 stackgroup='one'
             ))
-            # [resto del código para crear el gráfico de actividad...]
+            fig.add_trace(go.Scatter(
+                x=df_history['Tiempo'], 
+                y=df_history['Procesando'],
+                mode='lines',
+                name='Procesando',
+                line=dict(width=0.5, color='rgb(0, 123, 255)'),
+                stackgroup='one'
+            ))
+            fig.add_trace(go.Scatter(
+                x=df_history['Tiempo'], 
+                y=df_history['Completadas'],
+                mode='lines',
+                name='Completadas',
+                line=dict(width=0.5, color='rgb(40, 167, 69)'),
+                stackgroup='one'
+            ))
+            fig.add_trace(go.Scatter(
+                x=df_history['Tiempo'], 
+                y=df_history['Fallidas'],
+                mode='lines',
+                name='Fallidas',
+                line=dict(width=0.5, color='rgb(220, 53, 69)'),
+                stackgroup='one'
+            ))
+            
+            fig.update_layout(
+                title='Actividad de Colas en Tiempo Real',
+                xaxis_title='Tiempo',
+                yaxis_title='Cantidad de Tareas',
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
             
             st.plotly_chart(fig, use_container_width=True)
         
@@ -459,26 +555,55 @@ class ScrapingDashboard:
         with st.sidebar:
             st.header("Controles")
             
-            if st.button("Actualizar Datos"):
-                st.session_state.last_refresh = datetime.now()
-                st.experimental_rerun()
+            # Botón de actualización manual
+            if st.button("Actualizar Datos", key="refresh_button"):
+                self.increment_refresh_counter()
+                st.success("Datos actualizados correctamente")
             
             st.info(f"Última actualización: {st.session_state.last_refresh.strftime('%H:%M:%S')}")
+            
+            # Control de auto-refresh
+            auto_refresh = st.checkbox("Auto-refresh", value=st.session_state.auto_refresh)
+            if auto_refresh != st.session_state.auto_refresh:
+                self.toggle_auto_refresh()
+            
+            refresh_interval = st.slider(
+                "Intervalo de actualización (segundos)", 
+                min_value=5, 
+                max_value=60, 
+                value=10,
+                disabled=not st.session_state.auto_refresh
+            )
             
             # Añadir opciones para cargar datos
             st.subheader("Administración")
             
             # Botón para enqueue de tareas
-            if st.button("Recargar Tareas Pendientes"):
-                # Este botón podría ejecutar una función para recargar tareas no procesadas
-                # desde la BD a Redis
-                st.info("Esta función requiere implementación específica")
+            if st.button("Recargar Tareas Pendientes", key="reload_tasks"):
+                self.reload_pending_tasks()
+                
+            # Mostrar mensaje de confirmación si existe
+            if 'task_reload_message' in st.session_state:
+                st.success(st.session_state.task_reload_message)
+                # Limpiar mensaje después de mostrarlo
+                if time.time() - st.session_state.last_refresh.timestamp() > 3:
+                    del st.session_state.task_reload_message
             
             # Botón para reiniciar colas
-            if st.button("Reiniciar Colas"):
-                if st.checkbox("Confirmar reinicio"):
-                    self.task_manager.reset_queues()
-                    st.success("Colas reiniciadas con éxito")
+            if st.button("Reiniciar Colas", key="reset_queues"):
+                self.toggle_reset_confirmation()
+            
+            # Confirmación para reiniciar colas
+            if st.session_state.reset_confirmation:
+                st.warning("Esta acción eliminará todas las tareas en las colas. ¿Está seguro?")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Confirmar", key="confirm_reset"):
+                        self.reset_queues()
+                        st.success("Colas reiniciadas con éxito")
+                with col2:
+                    if st.button("Cancelar", key="cancel_reset"):
+                        st.session_state.reset_confirmation = False
         
         # Cuerpo principal
         self.render_metrics_section()
@@ -514,9 +639,15 @@ class ScrapingDashboard:
         # Sección de resultados recientes
         self.render_recent_results_section()
         
-        # Auto-refresh
-        time.sleep(10)
-        st.experimental_rerun()
+        # Auto-refresh controlado por checkbox
+        if st.session_state.auto_refresh:
+            time.sleep(0.1)  # Pequeña pausa para no bloquear la UI
+            st.empty()  # Elemento vacío para forzar rerun sin interferir con la UI
+            
+            # Solo hacer auto-refresh si ha pasado el intervalo configurado
+            if (datetime.now() - st.session_state.last_refresh).total_seconds() >= refresh_interval:
+                self.increment_refresh_counter()
+                st.experimental_rerun()
 
 def main():
     dashboard = ScrapingDashboard()
