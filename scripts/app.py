@@ -1,6 +1,13 @@
 # app.py
 
 import streamlit as st
+# Configurar la página antes de cualquier otro comando de Streamlit
+st.set_page_config(
+    page_title="Sistema Empresarial de Análisis",
+    page_icon="🏢",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -30,14 +37,6 @@ class EnterpriseApp:
         self.setup_agents()
         # Load data from DB if session_state is empty
         self.load_data_from_db()    
-            
-        # Enhanced page configuration
-        st.set_page_config(
-            page_title="Sistema Empresarial de Análisis",
-            page_icon="🏢",
-            layout="wide",
-            initial_sidebar_state="expanded"
-        )
         
         # Add custom CSS
         self.apply_custom_styling()
