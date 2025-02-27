@@ -113,20 +113,9 @@ class EnterpriseApp:
                 help="Select Groq model for SQL queries"
             )
             
-            selected_scraping_model = st.selectbox(
-                "Web Scraping Model",
-                list(SCRAPING_MODELS.keys()),
-                index=0,
-                help="Select model for web scraping analysis"
-            )
-            
             # Update models if changed
             if selected_sql_model != st.session_state.sql_model:
                 st.session_state.sql_model = selected_sql_model
-                self.setup_agents()
-                
-            if selected_scraping_model != st.session_state.scraping_model:
-                st.session_state.scraping_model = selected_scraping_model
                 self.setup_agents()
             
             # File Upload Section
@@ -162,15 +151,13 @@ class EnterpriseApp:
                 st.rerun()
 
     def render_main_content(self):
-        """Render main content with improved UI"""
         st.title("Business Analysis System 🏢")
         
-        # Enhanced tabs with custom styling and icons
+        # Solo 3 pestañas: Dashboard, Queries y Web Scraping
         tabs = st.tabs([
             "📊  DASHBOARD  ",
             "🔍  QUERIES  ",
-            "🌐  WEB SCRAPING  ",
-            "📈  ANALYSIS  "
+            "🌐  WEB SCRAPING  "
         ])
         
         with tabs[0]:
@@ -179,8 +166,6 @@ class EnterpriseApp:
             self.render_queries()
         with tabs[2]:
             self.render_scraping()
-        with tabs[3]:
-            self.render_analysis()
 
     def handle_file_upload(self, file):
         """Process file upload and update database, silently ignoring duplicates"""
@@ -306,6 +291,16 @@ class EnterpriseApp:
         with chart_col2:
             st.markdown("#### URL Status")
             self.render_url_status_chart(df)
+            
+        # --- Nueva sección: Integración de Análisis Interactivo ---
+        st.markdown("### 📈 Interactive Analysis")
+        analysis_type = st.selectbox(
+            "Analysis Type",
+            ["Geographic Distribution", "E-commerce Analysis", "Digital Presence", "Contactability"],
+            key="dashboard_analysis_type"
+        )
+        if st.button("Generate Analysis", key="dashboard_generate_analysis"):
+            self.generate_analysis(analysis_type)
 
     def render_queries(self):
         """Render queries section (SQL)"""
@@ -373,7 +368,7 @@ class EnterpriseApp:
             with col1:
                 # Get remaining count to help user decide limit
                 scraper = WebScrapingService(DB_CONFIG)
-                remaining = self.get_remaining_count()
+                remaining = int(self.get_remaining_count())
                 
                 limit = st.slider(
                     "URLs to process",
@@ -384,7 +379,7 @@ class EnterpriseApp:
                     help=f"Select number of URLs to process (remaining: {remaining})"
                 )
             with col2:
-                execute = st.button("Execute Scraping", use_container_width=True)
+                execute = st.button("Execute Scraping")
         
         if execute:
             try:
