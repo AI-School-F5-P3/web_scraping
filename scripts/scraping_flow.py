@@ -20,6 +20,13 @@ import logging
 from typing import List, Dict, Any, Tuple, Set
 from concurrent.futures import ThreadPoolExecutor
 from config import DB_CONFIG, TIMEOUT_CONFIG
+import urllib3
+import warnings
+
+# Silenciar warnings de conexiones HTTP
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
+warnings.filterwarnings("ignore", message="Retrying.*getaddrinfo failed")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -243,21 +250,39 @@ class WebScrapingService:
         # Generar combinaciones de nombres
         name_combinations = []
         
-        # Nombre completo
-        name_combinations.append(clean_name)
+        
+        
+        # Nombre completo sin guiones (todo junto)
+        name_combinations.append(clean_name.replace('-', ''))
         
         # Primeras palabras si hay más de una
         if len(words) > 1:
             # Primera palabra
             name_combinations.append(words[0])
             
-            # Dos primeras palabras
+            # Dos primeras palabras - con guiones
             if len(words) > 2:
                 name_combinations.append('-'.join(words[:2]))
-                
-            # Tres primeras palabras
+                # Dos primeras palabras - sin guiones
+                name_combinations.append(''.join(words[:2]))
+            
+            # Tres primeras palabras - con guiones
             if len(words) > 3:
                 name_combinations.append('-'.join(words[:3]))
+                # Tres primeras palabras - sin guiones
+                name_combinations.append(''.join(words[:3]))
+                
+            # Cuatro primeras palabras - con guiones
+            if len(words) > 4:
+                name_combinations.append('-'.join(words[:4]))
+                # Cuatro primeras palabras - sin guiones
+                name_combinations.append(''.join(words[:4]))
+                
+            # Cinco primeras palabras - con guiones
+            if len(words) > 5:
+                name_combinations.append('-'.join(words[:5]))
+                # Cinco primeras palabras - sin guiones
+                name_combinations.append(''.join(words[:5]))
         
         # Generar las URLs combinando nombres y dominios
         for name in name_combinations:
@@ -501,14 +526,38 @@ class WebScrapingService:
             clean_name = self.clean_company_name(company_name)
             words = clean_name.split('-')
             
-            # Si el nombre completo aparece exactamente, alta puntuación
-            if company_name in full_text:
-                score += 10
+            # Extraer elementos clave
+            title = soup.title.text.lower() if soup.title else ""
             
-            # Si aparecen partes significativas del nombre
+            # Meta description
+            meta_desc = ""
+            meta_tag = soup.find('meta', attrs={'name': 'description'})
+            if meta_tag and 'content' in meta_tag.attrs:
+                meta_desc = meta_tag['content'].lower()
+            
+            # Encabezados H1
+            h1_texts = [h1.text.lower() for h1 in soup.find_all('h1')]
+            
+            # Combinar textos clave
+            key_elements_text = title + " " + meta_desc + " " + " ".join(h1_texts)
+            
+            # Verificar coincidencia exacta en elementos clave
+            if company_name in key_elements_text:
+                score += 15  # Mayor puntuación por aparecer en elementos clave
+            
+            # Verificar coincidencias parciales
             for word in words:
-                if len(word) > 3 and word in full_text:
-                    score += 2
+                if len(word) > 3 and word in key_elements_text:
+                    score += 3  # Mayor puntuación por palabras en elementos clave
+            
+            # Para el resto del texto, mantener la lógica actual pero con menor peso
+            full_text = soup.get_text().lower()
+            if company_name in full_text:
+                score += 5  # Puntuación menor por aparecer en el texto general
+            
+            for word in words:
+                if len(word) > 3 and word in full_text and word not in key_elements_text:
+                    score += 1  # Menor puntuación para coincidencias en texto general
         
         # 2. Verificar si la provincia aparece
         if company.get('nom_provincia'):
@@ -602,6 +651,11 @@ class WebScrapingService:
         for term in domain_in_sale_terms:
             if term in full_text:
                 score -= 10
+                
+        domain = urlparse(url).netloc.lower()
+        if domain.endswith('.org') or domain.endswith('.net'):
+            score -= 10
+            print(f"Penalización por dominio .org/.net: -10 puntos para {url}")
         
         print(f"Puntuación para {url}: {score}")
         return score
