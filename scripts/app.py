@@ -17,6 +17,7 @@ from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA, SQL_MODELS, SCRAPING_MOD
 from agents import CustomLLM
 from scraping_flow import WebScrapingService
 import os
+from dashboard import ScrapingDashboard
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -333,220 +334,21 @@ class EnterpriseApp:
                 st.write(last_query["explanation"])
 
     def render_scraping(self):
-        """Render web scraping section"""
+        """Render web scraping section with Supabase integration"""
         st.subheader("🌐 Web Scraping")
         
-        if st.session_state.current_batch is None:
-            self.load_data_from_db()
+        st.info("Este módulo integra la funcionalidad de scraping con Supabase. Pulsa el botón para iniciar el proceso.")
         
-        if not st.session_state.current_batch:
-            st.warning("⚠️ You must first upload a file with URLs")
-            return
-
-        # Check for existing results from previous run
-        if "scraping_results" in st.session_state:
-            with st.container():
-                st.success("Previous scraping batch completed")
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Total Processed", st.session_state.scraping_results.get("processed", 0))
-                with col2:
-                    st.metric("Valid URLs", st.session_state.scraping_results.get("successful", 0))
-                with col3:
-                    st.metric("Failed URLs", st.session_state.scraping_results.get("failed", 0))
-                with col4:
-                    success_rate = (st.session_state.scraping_results.get("successful", 0) / 
-                                st.session_state.scraping_results.get("processed", 1) * 100)
-                    st.metric("Success Rate", f"{success_rate:.1f}%")
+        # Botón para iniciar el scraping basado en Supabase (dashboard)
+        if st.button("Start Scraping with Supabase"):
+            # Importa la clase del dashboard (asegúrate de que dashboard.py esté en el mismo directorio o en el path)
+            from dashboard import ScrapingDashboard
             
-            # Add a separator
-            st.markdown("---")
-        
-        # Layout with two columns
-        with st.container():
-            col1, col2 = st.columns(2)
-            with col1:
-                # Get remaining count to help user decide limit
-                scraper = WebScrapingService(DB_CONFIG)
-                remaining = int(self.get_remaining_count())
-                
-                limit = st.slider(
-                    "URLs to process",
-                    min_value=1,
-                    max_value=min(500, max(50, remaining)),
-                    value=min(50, remaining),
-                    step=5,
-                    help=f"Select number of URLs to process (remaining: {remaining})"
-                )
-            with col2:
-                execute = st.button("Execute Scraping")
-        
-        if execute:
-            try:
-                st.info("Starting scraping process...")
-                
-                # Create containers for progress, status, and details
-                progress_container = st.container()
-                with progress_container:
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    details_expander = st.expander("Process Details", expanded=False)
-                
-                results_container = st.container()
-                
-                # Initialize scraping service with DB config
-                scraper = WebScrapingService(DB_CONFIG)
-                
-                # Get companies to process according to limit
-                companies = scraper.get_companies_to_process(limit=limit)
-                total_companies = len(companies)
-                
-                if total_companies == 0:
-                    st.warning("No companies pending to process.")
-                    return
-                
-                with progress_container:
-                    st.write(f"Found {total_companies} companies to process")
-                    with details_expander:
-                        st.write("Companies to process:")
-                        for i, company in enumerate(companies[:10]):
-                            url_status = f": {company['url']}" if company.get('url') else ": [No URL]"
-                            st.write(f"- {company['razon_social']}{url_status}")
-                            if i >= 9 and len(companies) > 10:
-                                st.write(f"... and {len(companies) - 10} more")
-                                break
-                
-                # Initialize counters and result lists
-                processed = 0
-                successful = 0
-                failed = 0
-                successful_results = []
-                failed_results = []
-                
-                # Process each company
-                for i, company in enumerate(companies):
-                    try:
-                        company_name = company['razon_social']
-                        status_text.text(f"Processing {i+1}/{total_companies}: {company_name}")
-                        
-                        # Process company data
-                        result = scraper.process_company(company)
-                        
-                        # Save result and update counters
-                        if result['url_exists']:
-                            successful += 1
-                            successful_results.append(result)
-                            with details_expander:
-                                st.write(f"✅ {company_name}: Valid URL - {result['url_limpia']}")
-                            if result.get('phones'):
-                                with details_expander:
-                                    st.write(f"   📱 Phones: {len(result['phones'])}")
-                            if any(result.get('social_media', {}).values()):
-                                with details_expander:
-                                    social_count = sum(1 for v in result.get('social_media', {}).values() if v)
-                                    st.write(f"   🔗 Social media: {social_count}")
-                        else:
-                            failed += 1
-                            failed_results.append(result)
-                            with details_expander:
-                                st.write(f"❌ {company_name}: {result['url_status_mensaje']}")
-                        
-                        # Update database in real time
-                        update_success = scraper.save_results(result)
-                        if not update_success:
-                            with details_expander:
-                                st.write(f"⚠️ Error saving data for {company_name}")
-                                
-                    except Exception as e:
-                        failed += 1
-                        failed_results.append({
-                            'cod_infotel': company['cod_infotel'],
-                            'url_exists': False,
-                            'url_limpia': company.get('url'),
-                            'url_status': -1,
-                            'url_status_mensaje': f"Error: {str(e)}"
-                        })
-                        with details_expander:
-                            st.write(f"❌ Error processing {company_name}: {str(e)}")
-                    
-                    processed += 1
-                    progress_bar.progress(processed / total_companies)
-                
-                # Store results in session state for future reference
-                st.session_state.scraping_results = {
-                    "processed": processed,
-                    "successful": successful,
-                    "failed": failed,
-                    "success_rate": (successful / processed * 100) if processed > 0 else 0,
-                    "successful_results": successful_results,
-                    "failed_results": failed_results
-                }
-                
-                # Display final metrics and results
-                with results_container:
-                    st.success("Scraping process completed")
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Total Processed", processed)
-                    with col2:
-                        st.metric("Valid URLs", successful)
-                    with col3:
-                        st.metric("Failed URLs", failed)
-                    with col4:
-                        success_rate = (successful / processed * 100) if processed > 0 else 0
-                        st.metric("Success Rate", f"{success_rate:.1f}%")
-                    
-                    if successful_results:
-                        with st.expander("Successfully Processed URLs", expanded=True):
-                            success_df = pd.DataFrame([{
-                                'Company': i+1,
-                                'URL': r['url_limpia'],
-                                'Phones': len(r.get('phones', [])),
-                                'Social Media': sum(1 for v in r.get('social_media', {}).values() if v),
-                                'E-Commerce': '✓' if r.get('is_ecommerce') else '✗'
-                            } for i, r in enumerate(successful_results)])
-                            st.dataframe(success_df, use_container_width=True)
-                    
-                    if failed_results:
-                        with st.expander("Failed URLs", expanded=True):
-                            fail_df = pd.DataFrame([{
-                                'Company': i+1,
-                                'URL': r.get('url_limpia'),
-                                'Status': r.get('url_status'),
-                                'Message': r.get('url_status_mensaje')
-                            } for i, r in enumerate(failed_results)])
-                            st.dataframe(fail_df, use_container_width=True)
-                
-                # Check if there are more companies to process
-                remaining = self.get_remaining_count()
-                
-                # Continue processing section
-                st.markdown("---")
-                st.subheader("Continue Processing")
-                
-                if remaining > 0:
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        next_limit = st.slider(
-                            "Companies to process next",
-                            min_value=1,
-                            max_value=min(500, remaining),
-                            value=min(50, remaining),
-                            step=5,
-                            key="next_limit"
-                        )
-                    with col2:
-                        st.write(f"Remaining companies: {remaining}")
-                        if st.button(f"Process Next Batch", key="continue_processing"):
-                            # Clear previous results and rerun with new limit
-                            limit = next_limit
-                            st.rerun()
-                else:
-                    st.success("🎉 All companies have been processed.")
-            
-            except Exception as e:
-                st.error(f"Error in scraping process: {str(e)}")
-                logger.error(f"Scraping error: {str(e)}")
+            # Instanciar y ejecutar el dashboard
+            dashboard_instance = ScrapingDashboard()
+            dashboard_instance.run()
+        else:
+            st.write("Pulsa el botón para iniciar el proceso de scraping.")
                 
     def get_remaining_count(self):
         """Get the count of remaining companies to process"""
