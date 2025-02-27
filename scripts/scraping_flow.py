@@ -479,15 +479,15 @@ class WebScrapingService:
         # 13. Penalizar si es un dominio que está en venta
         domain_in_sale_terms = [
     
-    "dominio en venta", "comprar este dominio", "este dominio está en venta",  
-    "venta de dominio", "adquiere este dominio", "domain for sale", "buy this domain", "this domain is for sale",  
-    "domain available", "this domain is available", "domain auction", "bid on this domain",  
-    "purchase this domain"
-]
+            "dominio en venta", "comprar este dominio", "este dominio está en venta",  
+            "venta de dominio", "adquiere este dominio", "domain for sale", "buy this domain", "this domain is for sale",  
+            "domain available", "this domain is available", "domain auction", "bid on this domain",  
+            "purchase this domain"
+        ]
         
         for term in domain_in_sale_terms:
             if term in full_text:
-                score -= 100
+                score -= 10
         
         print(f"Puntuación para {url}: {score}")
         return score
