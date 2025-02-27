@@ -230,14 +230,14 @@ class WebScrapingService:
         words = clean_name.split('-')
         
         # Determinar dominios basados en provincia
-        domains = ['.es', '.com']
+        domains = ['.es', '.com', 'net', 'org']
         if provincia:
             provincia_norm = unicodedata.normalize('NFKD', str(provincia)).encode('ASCII', 'ignore').decode()
-            if provincia_norm.upper() in ['BARCELONA', 'TARRAGONA', 'LERIDA', 'GIRONA']:
+            if provincia_norm.upper() in ['BARCELONA', 'TARRAGONA', 'LERIDA', 'GIRONA', 'GERONA', 'LLEIDA']:
                 domains.append('.cat')
-            elif provincia_norm.upper() in ['LA CORUNA', 'LUGO', 'ORENSE', 'PONTEVEDRA']:
+            elif provincia_norm.upper() in ['LA CORUNA', 'LUGO', 'ORENSE', 'PONTEVEDRA', 'A CORUÑA', 'OURENSE']:
                 domains.append('.gal')
-            elif provincia_norm.upper() in ['ALAVA', 'VIZCAYA', 'GUIPUZCOA']:
+            elif provincia_norm.upper() in ['ALAVA', 'VIZCAYA', 'GUIPUZCOA', 'ARABA', 'BIZKAIA', 'GIPUZKOA']:
                 domains.append('.eus')
 
         # Generar combinaciones de nombres
@@ -782,7 +782,7 @@ class WebScrapingService:
         text_content = soup.get_text()
         prices = re.findall(price_pattern, text_content, re.IGNORECASE)
         if prices:
-            score += 2
+            score += 0.5
             evidence.append(f"Precios encontrados: {len(prices)} ocurrencias")
         
         is_ecommerce = score >= 5
