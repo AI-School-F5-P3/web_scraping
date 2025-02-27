@@ -230,7 +230,7 @@ class WebScrapingService:
         words = clean_name.split('-')
         
         # Determinar dominios basados en provincia
-        domains = ['.es', '.com', 'net', 'org']
+        domains = ['.es', '.com', '.net', '.org']
         if provincia:
             provincia_norm = unicodedata.normalize('NFKD', str(provincia)).encode('ASCII', 'ignore').decode()
             if provincia_norm.upper() in ['BARCELONA', 'TARRAGONA', 'LERIDA', 'GIRONA', 'GERONA', 'LLEIDA']:
@@ -272,32 +272,141 @@ class WebScrapingService:
 
     @staticmethod
     def verify_domain(url: str) -> bool:
-        """Verifica si un dominio existe"""
+        """Verifica si un dominio existe usando múltiples métodos"""
         try:
             domain = url.replace('https://', '').replace('http://', '')
             if domain.startswith('www.'):
                 base_domain = domain[4:]
             else:
                 base_domain = domain
-                
+                    
             # Si no hay un punto en el dominio, no es un dominio válido
             if '.' not in base_domain:
                 return False
-                
+                    
             # Extraer solo el nombre de dominio sin la ruta
             base_domain = base_domain.split('/')[0]
-
+            
+            # Lista de servidores DNS para pruebas
+            dns_servers = [
+                ['8.8.8.8', '8.8.4.4'],  # Google DNS
+                ['1.1.1.1', '1.0.0.1'],  # Cloudflare DNS
+                ['9.9.9.9', '149.112.112.112'],  # Quad9
+                ['208.67.222.222', '208.67.220.220'],  # OpenDNS
+                []  # DNS del sistema (como fallback)
+            ]
+            
+            # Método 1: Probar con pool de servidores DNS
+            for nameservers in dns_servers:
+                try:
+                    resolver = dns.resolver.Resolver()
+                    if nameservers:  # Si hay servidores específicos
+                        resolver.nameservers = nameservers
+                    resolver.timeout = 2
+                    resolver.lifetime = 2
+                    
+                    resolver.resolve(base_domain, 'A')
+                    return True
+                except Exception as e:
+                    # Intentar con www si no lo tiene
+                    if not domain.startswith('www.'):
+                        try:
+                            resolver = dns.resolver.Resolver()
+                            if nameservers:
+                                resolver.nameservers = nameservers
+                            resolver.timeout = 2
+                            resolver.lifetime = 2
+                            
+                            resolver.resolve('www.' + base_domain, 'A')
+                            return True
+                        except:
+                            pass  # Continuar con el siguiente servidor DNS
+                    continue  # Probar con el siguiente servidor DNS
+            
+            # Método 2: Usar socket como fallback
             try:
-                dns.resolver.resolve(base_domain, 'A')
+                socket.setdefaulttimeout(3)
+                socket.gethostbyname(base_domain)
                 return True
             except:
-                try:
-                    socket.gethostbyname(domain)
+                # Probar con www si no lo tiene
+                if not domain.startswith('www.'):
+                    try:
+                        socket.gethostbyname('www.' + base_domain)
+                        return True
+                    except:
+                        pass
+            
+            # Método 3: Verificación HTTP como último recurso
+            try:
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'
+                }
+                # Configurar una sesión con reintentos
+                session = requests.Session()
+                retry = Retry(
+                    total=2,
+                    backoff_factor=0.5,
+                    status_forcelist=[500, 502, 503, 504]
+                )
+                adapter = HTTPAdapter(max_retries=retry)
+                session.mount('http://', adapter)
+                session.mount('https://', adapter)
+                
+                # Intentar HTTPS
+                response = session.head(
+                    f"https://{base_domain}", 
+                    timeout=5, 
+                    headers=headers, 
+                    allow_redirects=True,
+                    verify=False
+                )
+                if response.status_code < 500:  # Aceptar incluso códigos de error como 403, 404
                     return True
+            except:
+                # Intentar con HTTP
+                try:
+                    response = session.head(
+                        f"http://{base_domain}", 
+                        timeout=5, 
+                        headers=headers, 
+                        allow_redirects=True,
+                        verify=False
+                    )
+                    if response.status_code < 500:
+                        return True
                 except:
-                    return False
+                    # Intentar con www si no lo tiene
+                    if not domain.startswith('www.'):
+                        try:
+                            response = session.head(
+                                f"https://www.{base_domain}", 
+                                timeout=5, 
+                                headers=headers, 
+                                allow_redirects=True,
+                                verify=False
+                            )
+                            if response.status_code < 500:
+                                return True
+                        except:
+                            try:
+                                response = session.head(
+                                    f"http://www.{base_domain}", 
+                                    timeout=5, 
+                                    headers=headers, 
+                                    allow_redirects=True,
+                                    verify=False
+                                )
+                                if response.status_code < 500:
+                                    return True
+                            except:
+                                pass
+            
+            # Si ninguno de los métodos funcionó, el dominio no es válido
+            return False
+                        
         except Exception as e:
-            print(f"Error verificando dominio {url}: {str(e)}")
+            print(f"Error general verificando dominio {url}: {str(e)}")
             return False
 
     def verify_urls_parallel(self, urls: Set[str], company: Dict) -> Dict[str, Dict]:
@@ -529,23 +638,153 @@ class WebScrapingService:
                 url = 'https://' + url
             print(f"🔗 URL normalizada: {url}")
 
-            # Verificar si la URL existe (DNS lookup)
+            # Verificar si la URL existe usando el método mejorado
             domain = urlparse(url).netloc
             base_domain = domain[4:] if domain.startswith('www.') else domain
 
             print(f"🔍 Verificando dominio: {base_domain}")
-            try:
-                dns.resolver.resolve(base_domain, 'A')
-                print("✅ Dominio válido (DNS)")
-                domain_exists = True
-            except:
+            
+            # Lista de servidores DNS para pruebas
+            dns_servers = [
+                ['8.8.8.8', '8.8.4.4'],  # Google DNS
+                ['1.1.1.1', '1.0.0.1'],  # Cloudflare DNS
+                ['9.9.9.9', '149.112.112.112'],  # Quad9
+                []  # DNS del sistema (como fallback)
+            ]
+            
+            domain_exists = False
+            
+            # Método 1: Probar con pool de servidores DNS
+            for nameservers in dns_servers:
                 try:
-                    dns.resolver.resolve('www.' + base_domain, 'A')
-                    print("✅ Dominio válido (DNS con www)")
+                    resolver = dns.resolver.Resolver()
+                    if nameservers:  # Si hay servidores específicos
+                        resolver.nameservers = nameservers
+                        dns_name = nameservers[0]
+                    else:
+                        dns_name = "Local"
+                        
+                    resolver.timeout = 2
+                    resolver.lifetime = 2
+                    
+                    answers = resolver.resolve(base_domain, 'A')
+                    ips = [rdata.address for rdata in answers]
+                    print(f"✅ Dominio válido con DNS {dns_name}: {base_domain} -> {ips}")
                     domain_exists = True
-                except:
-                    print("❌ Dominio no válido")
-                    domain_exists = False
+                    break  # Salir del bucle si tiene éxito
+                except Exception as e:
+                    print(f"❌ Error con DNS {nameservers[0] if nameservers else 'Local'}: {type(e).__name__}")
+                    # Intentar con www si no lo tiene
+                    if not domain.startswith('www.'):
+                        try:
+                            resolver = dns.resolver.Resolver()
+                            if nameservers:
+                                resolver.nameservers = nameservers
+                            resolver.timeout = 2
+                            resolver.lifetime = 2
+                            
+                            answers = resolver.resolve('www.' + base_domain, 'A')
+                            ips = [rdata.address for rdata in answers]
+                            print(f"✅ Dominio válido con www usando DNS {dns_name}: www.{base_domain} -> {ips}")
+                            domain_exists = True
+                            break  # Salir del bucle si tiene éxito
+                        except:
+                            pass  # Continuar con el siguiente servidor DNS
+            
+            # Método 2: Usar socket como fallback si DNS falló
+            if not domain_exists:
+                try:
+                    socket.setdefaulttimeout(3)
+                    ip = socket.gethostbyname(base_domain)
+                    print(f"✅ Dominio válido usando socket: {base_domain} -> {ip}")
+                    domain_exists = True
+                except Exception as e:
+                    print(f"❌ Error con socket: {type(e).__name__}")
+                    # Probar con www si no lo tiene
+                    if not domain.startswith('www.'):
+                        try:
+                            ip = socket.gethostbyname('www.' + base_domain)
+                            print(f"✅ Dominio válido con www usando socket: www.{base_domain} -> {ip}")
+                            domain_exists = True
+                        except:
+                            pass
+            
+            # Método 3: Verificación HTTP como último recurso
+            if not domain_exists:
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'
+                }
+                try:
+                    # Configurar una sesión con reintentos
+                    retry_session = requests.Session()
+                    retry = Retry(
+                        total=2,
+                        backoff_factor=0.5,
+                        status_forcelist=[500, 502, 503, 504]
+                    )
+                    adapter = HTTPAdapter(max_retries=retry)
+                    retry_session.mount('http://', adapter)
+                    retry_session.mount('https://', adapter)
+                    
+                    # Intentar HTTPS
+                    print(f"Intentando verificación HTTPS para {base_domain}...")
+                    response = retry_session.head(
+                        f"https://{base_domain}", 
+                        timeout=5, 
+                        headers=headers, 
+                        allow_redirects=True,
+                        verify=False
+                    )
+                    if response.status_code < 500:  # Aceptar incluso códigos de error como 403, 404
+                        print(f"✅ Dominio válido mediante petición HTTPS: {base_domain} (Status: {response.status_code})")
+                        domain_exists = True
+                except Exception as e:
+                    print(f"❌ Error con petición HTTPS: {type(e).__name__}")
+                    # Intentar con HTTP
+                    try:
+                        print(f"Intentando verificación HTTP para {base_domain}...")
+                        response = retry_session.head(
+                            f"http://{base_domain}", 
+                            timeout=5, 
+                            headers=headers, 
+                            allow_redirects=True,
+                            verify=False
+                        )
+                        if response.status_code < 500:
+                            print(f"✅ Dominio válido mediante petición HTTP: {base_domain} (Status: {response.status_code})")
+                            domain_exists = True
+                    except Exception as e:
+                        print(f"❌ Error con petición HTTP: {type(e).__name__}")
+                        # Intentar con www si no lo tiene
+                        if not domain.startswith('www.'):
+                            try:
+                                print(f"Intentando verificación HTTPS para www.{base_domain}...")
+                                response = retry_session.head(
+                                    f"https://www.{base_domain}", 
+                                    timeout=5, 
+                                    headers=headers, 
+                                    allow_redirects=True,
+                                    verify=False
+                                )
+                                if response.status_code < 500:
+                                    print(f"✅ Dominio válido mediante petición HTTPS con www: www.{base_domain} (Status: {response.status_code})")
+                                    domain_exists = True
+                            except Exception as e:
+                                print(f"❌ Error con petición HTTPS con www: {type(e).__name__}")
+                                try:
+                                    print(f"Intentando verificación HTTP para www.{base_domain}...")
+                                    response = retry_session.head(
+                                        f"http://www.{base_domain}", 
+                                        timeout=5, 
+                                        headers=headers, 
+                                        allow_redirects=True,
+                                        verify=False
+                                    )
+                                    if response.status_code < 500:
+                                        print(f"✅ Dominio válido mediante petición HTTP con www: www.{base_domain} (Status: {response.status_code})")
+                                        domain_exists = True
+                                except Exception as e:
+                                    print(f"❌ Error con petición HTTP con www: {type(e).__name__}")
 
             if not domain_exists:
                 data.update({
