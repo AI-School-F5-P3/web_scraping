@@ -278,11 +278,7 @@ class WebScrapingService:
                 # Cuatro primeras palabras - sin guiones
                 name_combinations.append(''.join(words[:4]))
                 
-            # Cinco primeras palabras - con guiones
-            if len(words) > 5:
-                name_combinations.append('-'.join(words[:5]))
-                # Cinco primeras palabras - sin guiones
-                name_combinations.append(''.join(words[:5]))
+            
         
         # Generar las URLs combinando nombres y dominios
         for name in name_combinations:
