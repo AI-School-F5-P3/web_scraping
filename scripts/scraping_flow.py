@@ -287,15 +287,57 @@ class WebScrapingService:
             # Extraer solo el nombre de dominio sin la ruta
             base_domain = base_domain.split('/')[0]
 
+            # Método 1: Resolver DNS
             try:
                 dns.resolver.resolve(base_domain, 'A')
                 return True
             except:
-                try:
-                    socket.gethostbyname(domain)
+                pass
+            
+            # Método 2: Intento alternativo con www
+            try:
+                dns.resolver.resolve('www.' + base_domain, 'A')
+                return True
+            except:
+                pass
+                
+            # Método 3: Usar socket
+            try:
+                socket.gethostbyname(base_domain)
+                return True
+            except:
+                pass
+                
+            # Método 4: Intento directo HTTP
+            try:
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'
+                }
+                response = requests.head(
+                    f"https://{base_domain}", 
+                    timeout=5, 
+                    headers=headers, 
+                    allow_redirects=True,
+                    verify=False
+                )
+                if response.status_code < 500:  # Aceptar incluso códigos de error como 403, 404 como dominios válidos
                     return True
+            except:
+                # Intentar con www. si falló el anterior
+                try:
+                    response = requests.head(
+                        f"https://www.{base_domain}", 
+                        timeout=5, 
+                        headers=headers, 
+                        allow_redirects=True,
+                        verify=False
+                    )
+                    if response.status_code < 500:
+                        return True
                 except:
-                    return False
+                    pass
+                    
+            return False
         except Exception as e:
             print(f"Error verificando dominio {url}: {str(e)}")
             return False
@@ -491,6 +533,9 @@ class WebScrapingService:
         print(f"🌍 URL original: {url}")
 
         session = requests.Session()
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'
+        }
 
         try:
             # Estructura inicial de datos
@@ -532,7 +577,30 @@ class WebScrapingService:
                     print("✅ Dominio válido (DNS con www)")
                     domain_exists = True
                 except:
-                    print("❌ Dominio no válido")
+                    try:
+                        socket.gethostbyname(base_domain)
+                        print("✅ Dominio válido (Socket)")
+                        domain_exists = True
+                    except:
+                        print("❌ Dominio no válido")
+                        domain_exists = False
+
+            if not domain_exists:
+                # Try a direct HTTP request as a fallback
+                try:
+                    print("🔄 Intentando verificación HTTP como alternativa...")
+                    fallback_response = requests.head(
+                        url, 
+                        timeout=5,
+                        verify=False,
+                        headers=headers,
+                        allow_redirects=True
+                    )
+                    if fallback_response.status_code < 500:
+                        domain_exists = True
+                        print(f"✅ Dominio válido (verificación HTTP): status code {fallback_response.status_code}")
+                except Exception as e:
+                    print(f"❌ Verificación HTTP falló: {str(e)}")
                     domain_exists = False
 
             if not domain_exists:
