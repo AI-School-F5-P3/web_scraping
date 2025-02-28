@@ -3,7 +3,7 @@
 Este proyecto implementa un sistema de scraping distribuido para procesar grandes volúmenes de datos de empresas (100,000+) utilizando múltiples workers que pueden ejecutarse en diferentes máquinas. La solución utiliza **Supabase** como base de datos centralizada y **Redis Cloud** para coordinar el trabajo entre los diferentes nodos.
 
 ## Arquitectura del Sistema
-
+![alt text](images/architecture-diagram.svg)
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500">
   <!-- Fondo y título -->
   <rect width="800" height="500" fill="#f8f9fa" rx="5" ry="5"/>
