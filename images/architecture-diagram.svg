@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500">
+  <!-- Fondo y título -->
+  <rect width="800" height="500" fill="#f8f9fa" rx="5" ry="5"/>
+  <text x="400" y="30" font-family="Arial, sans-serif" font-size="22" font-weight="bold" text-anchor="middle" fill="#333">Arquitectura Distribuida del Sistema de Scraping</text>
+  
+  <!-- Supabase (Base de datos) -->
+  <rect x="40" y="220" width="160" height="120" rx="5" ry="5" fill="#3ecf8e" fill-opacity="0.2" stroke="#3ecf8e" stroke-width="2"/>
+  <text x="120" y="200" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="#333">Supabase</text>
+  <text x="120" y="250" font-family="Arial, sans-serif" font-size="14" text-anchor="middle" fill="#333">Base de Datos</text>
+  <text x="120" y="270" font-family="Arial, sans-serif" font-size="14" text-anchor="middle" fill="#333">Centralizada</text>
+  <text x="120" y="310" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#555">Almacena datos de</text>
+  <text x="120" y="330" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#555">empresas y resultados</text>
+  
+  <!-- Redis (Sistema de colas) -->
+  <rect x="320" y="90" width="160" height="120" rx="5" ry="5" fill="#dc382c" fill-opacity="0.2" stroke="#dc382c" stroke-width="2"/>
+  <text x="400" y="70" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="#333">Redis Cloud</text>
+  <text x="400" y="120" font-family="Arial, sans-serif" font-size="14" text-anchor="middle" fill="#333">Sistema de Colas</text>
+  <text x="400" y="160" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#555">Coordina tareas entre</text>
+  <text x="400" y="180" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#555">workers distribuidos</text>
+  
+  <!-- Workers - Máquina 1 -->
+  <rect x="600" y="100" width="160" height="80" rx="5" ry="5" fill="#4285f4" fill-opacity="0.2" stroke="#4285f4" stroke-width="2"/>
+  <text x="680" y="80" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle" fill="#333">Máquina 1</text>
+  <rect x="620" y="115" width="120" height="25" rx="3" ry="3" fill="#4285f4" fill-opacity="0.3" stroke="#4285f4" stroke-width="1"/>
+  <text x="680" y="132" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#333">Worker 1</text>
+  <rect x="620" y="145" width="120" height="25" rx="3" ry="3" fill="#4285f4" fill-opacity="0.3" stroke="#4285f4" stroke-width="1"/>
+  <text x="680" y="162" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#333">Worker 2</text>
+  
+  <!-- Workers - Máquina 2 -->
+  <rect x="600" y="220" width="160" height="80" rx="5" ry="5" fill="#4285f4" fill-opacity="0.2" stroke="#4285f4" stroke-width="2"/>
+  <text x="680" y="200" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle" fill="#333">Máquina 2</text>
+  <rect x="620" y="235" width="120" height="25" rx="3" ry="3" fill="#4285f4" fill-opacity="0.3" stroke="#4285f4" stroke-width="1"/>
+  <text x="680" y="252" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#333">Worker 3</text>
+  <rect x="620" y="265" width="120" height="25" rx="3" ry="3" fill="#4285f4" fill-opacity="0.3" stroke="#4285f4" stroke-width="1"/>
+  <text x="680" y="282" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#333">Worker 4</text>
+  
+  <!-- Workers - Máquina 3 -->
+  <rect x="600" y="340" width="160" height="80" rx="5" ry="5" fill="#4285f4" fill-opacity="0.2" stroke="#4285f4" stroke-width="2"/>
+  <text x="680" y="320" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle" fill="#333">Máquina 3</text>
+  <rect x="620" y="355" width="120" height="25" rx="3" ry="3" fill="#4285f4" fill-opacity="0.3" stroke="#4285f4" stroke-width="1"/>
+  <text x="680" y="372" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#333">Worker 5</text>
+  <rect x="620" y="385" width="120" height="25" rx="3" ry="3" fill="#4285f4" fill-opacity="0.3" stroke="#4285f4" stroke-width="1"/>
+  <text x="680" y="402" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#333">Worker 6</text>
+  
+  <!-- Dashboard de Monitoreo -->
+  <rect x="320" y="340" width="160" height="100" rx="5" ry="5" fill="#fbbc05" fill-opacity="0.2" stroke="#fbbc05" stroke-width="2"/>
+  <text x="400" y="320" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="#333">Dashboard</text>
+  <text x="400" y="370" font-family="Arial, sans-serif" font-size="14" text-anchor="middle" fill="#333">Monitoreo</text>
+  <text x="400" y="390" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#555">Seguimiento en</text>
+  <text x="400" y="410" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#555">tiempo real</text>
+  
+  <!-- Líneas de conexión -->
+  <!-- Supabase a Redis -->
+  <path d="M200 250 C250 200, 230 150, 320 150" stroke="#666" stroke-width="2" fill="none" stroke-dasharray="5,5"/>
+  <polygon points="315,150 325,145 325,155" fill="#666"/>
+  
+  <!-- Redis a Supabase -->
+  <path d="M320 170 C250 220, 250 260, 200 270" stroke="#666" stroke-width="2" fill="none" stroke-dasharray="5,5"/>
+  <polygon points="205,270 195,265 195,275" fill="#666"/>
+  
+  <!-- Redis a Máquina 1 -->
+  <path d="M480 130 L600 130" stroke="#666" stroke-width="2" fill="none"/>
+  <polygon points="595,130 605,125 605,135" fill="#666"/>
+  
+  <!-- Máquina 1 a Redis -->
+  <path d="M600 150 L480 150" stroke="#666" stroke-width="2" fill="none"/>
+  <polygon points="485,150 475,145 475,155" fill="#666"/>
+  
+  <!-- Redis a Máquina 2 -->
+  <path d="M480 160 C550 180, 550 230, 600 240" stroke="#666" stroke-width="2" fill="none"/>
+  <polygon points="595,240 605,235 605,245" fill="#666"/>
+  
+  <!-- Máquina 2 a Redis -->
+  <path d="M600 260 C550 270, 540 190, 480 170" stroke="#666" stroke-width="2" fill="none"/>
+  <polygon points="485,170 475,165 475,175" fill="#666"/>
+  
+  <!-- Redis a Máquina 3 -->
+  <path d="M480 170 C500 240, 550 350, 600 360" stroke="#666" stroke-width="2" fill="none"/>
+  <polygon points="595,360 605,355 605,365" fill="#666"/>
+  
+  <!-- Máquina 3 a Redis -->
+  <path d="M600 380 C540 370, 480 250, 460 180" stroke="#666" stroke-width="2" fill="none"/>
+  <polygon points="465,180 455,175 455,185" fill="#666"/>
+  
+  <!-- Redis a Dashboard -->
+  <path d="M400 210 L400 340" stroke="#666" stroke-width="2" fill="none"/>
+  <polygon points="400,335 395,345 405,345" fill="#666"/>
+  
+  <!-- Dashboard a Supabase -->
+  <path d="M320 390 C250 380, 220 320, 200 300" stroke="#666" stroke-width="2" fill="none" stroke-dasharray="5,5"/>
+  <polygon points="205,300 195,295 195,305" fill="#666"/>
+  
+  <!-- Leyenda -->
+  <rect x="40" y="400" width="200" height="80" rx="5" ry="5" fill="white" stroke="#ccc" stroke-width="1"/>
+  <text x="60" y="420" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333">Leyenda:</text>
+  
+  <line x1="60" y1="435" x2="90" y2="435" stroke="#666" stroke-width="2" fill="none"/>
+  <polygon points="85,435 95,430 95,440" fill="#666"/>
+  <text x="105" y="440" font-family="Arial, sans-serif" font-size="12" fill="#333">Flujo de datos</text>
+  
+  <line x1="60" y1="460" x2="90" y2="460" stroke="#666" stroke-width="2" fill="none" stroke-dasharray="5,5"/>
+  <polygon points="85,460 95,455 95,465" fill="#666"/>
+  <text x="105" y="465" font-family="Arial, sans-serif" font-size="12" fill="#333">Consultas a BD</text>
+</svg>
