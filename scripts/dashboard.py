@@ -210,7 +210,6 @@ class ScrapingDashboard:
 
     def reload_pending_tasks(self):
         """Recarga las tareas pendientes desde la base de datos"""
-
         try:
             # Consulta para obtener todas las empresas no procesadas
             query = """
@@ -226,29 +225,40 @@ class ScrapingDashboard:
                 self.increment_refresh_counter()
                 return 0
                 
-            # Enqueue cada tarea pendiente
-            count = 0
+            # Preparar lista de tareas para encolar
+            tasks_list = []
             for index, row in pending_tasks.iterrows():
-                task_data = {
-                    "cod_infotel": row["cod_infotel"],
-                    "razon_social": row["razon_social"],
-                    "url": row["url"]
-                }
+                # Manejar valores nulos en la URL
+                url_value = "" if pd.isna(row["url"]) else row["url"]
                 
-                # Agregar a la cola usando el task_manager
-                self.task_manager.enqueue_tasks(task_data)
-                count += 1
+                task_data = {
+                    "cod_infotel": int(row["cod_infotel"]),  # Asegurar que es entero
+                    "razon_social": str(row["razon_social"]),  # Asegurar que es string
+                    "url": str(url_value)  # Asegurar que es string
+                }
+                tasks_list.append(task_data)
             
-            # Agregar mensaje de éxito y actualizar contador (del nuevo código)
-            st.session_state.task_reload_message = f"Tareas pendientes recargadas correctamente ({count})"
-            self.increment_refresh_counter()
-            
-            return count
+            # Encolar todas las tareas de una vez
+            if tasks_list:
+                self.task_manager.enqueue_tasks(tasks_list)  # Pasar lista completa
+                count = len(tasks_list)
+                
+                # Agregar mensaje de éxito
+                st.session_state.task_reload_message = f"Tareas pendientes recargadas correctamente ({count})"
+                self.increment_refresh_counter()
+                return count
+            else:
+                st.session_state.task_reload_message = "No se pudieron preparar tareas para recargar"
+                self.increment_refresh_counter()
+                return 0
             
         except Exception as e:
-            st.error(f"Error al recargar tareas: {str(e)}")
+            st.session_state.task_reload_message = f"Error al recargar tareas: {str(e)}"
+            print(f"Error detallado: {str(e)}")
+            import traceback
+            traceback.print_exc()
             self.increment_refresh_counter()
-            return -1   
+            return -1 
         
     def render_metrics_section(self):
         """Renderiza sección de métricas principales"""
