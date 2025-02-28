@@ -24,12 +24,12 @@ import urllib3
 import warnings
 
 # Configurar silenciamiento de warnings y logging
+# Configurar silenciamiento de warnings y logging
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", message=".*Retrying.*")  # Captura todos los mensajes de reintento
 warnings.filterwarnings("ignore", message=".*getaddrinfo failed.*")
 warnings.filterwarnings("ignore", category=urllib3.exceptions.HTTPWarning)
-warnings.filterwarnings("ignore", category=requests.exceptions.RequestException)
 
 # Silenciar el logger de urllib3
 logging.getLogger("urllib3").setLevel(logging.ERROR)
