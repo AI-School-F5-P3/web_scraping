@@ -263,9 +263,7 @@ class ScrapingDashboard:
         
         # Obtener datos
         queue_stats = self.get_queue_stats()
-        progress_data = self.get_progress_data()
         success_rate = self.get_success_rate()
-        active_workers = self.get_active_workers()
         
         # Actualizar historial para gráficos
         now = datetime.now()
@@ -284,21 +282,9 @@ class ScrapingDashboard:
             st.session_state.history['failed'] = st.session_state.history['failed'][-100:]
         
         # Crear fila de métricas
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="metric-label">Progreso Total</div>
-                    <div class="metric-value">{progress_data['progress']:.1f}%</div>
-                    <div>{progress_data['processed']} / {progress_data['total']}</div>
-                </div>
-                """, 
-                unsafe_allow_html=True
-            )
-        
-        with col2:
             st.markdown(
                 f"""
                 <div class="metric-card">
@@ -310,7 +296,7 @@ class ScrapingDashboard:
                 unsafe_allow_html=True
             )
         
-        with col3:
+        with col2:
             st.markdown(
                 f"""
                 <div class="metric-card">
@@ -322,25 +308,13 @@ class ScrapingDashboard:
                 unsafe_allow_html=True
             )
         
-        with col4:
+        with col3:
             st.markdown(
                 f"""
                 <div class="metric-card">
                     <div class="metric-label">Completadas</div>
                     <div class="metric-value success-metric">{queue_stats['completed']}</div>
-                    <div>Éxitos: {success_rate['rate']:.1f}%</div>
-                </div>
-                """, 
-                unsafe_allow_html=True
-            )
-        
-        with col5:
-            st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="metric-label">Workers Activos</div>
-                    <div class="metric-value">{len(active_workers)}</div>
-                    <div>Últimos 5min</div>
+                    <div>Éxitos</div>
                 </div>
                 """, 
                 unsafe_allow_html=True
