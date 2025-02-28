@@ -20,6 +20,20 @@ import logging
 from typing import List, Dict, Any, Tuple, Set
 from concurrent.futures import ThreadPoolExecutor
 from config import DB_CONFIG, TIMEOUT_CONFIG
+import urllib3
+import warnings
+
+# Configurar silenciamiento de warnings y logging
+# Configurar silenciamiento de warnings y logging
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
+warnings.filterwarnings("ignore", message=".*Retrying.*")  # Captura todos los mensajes de reintento
+warnings.filterwarnings("ignore", message=".*getaddrinfo failed.*")
+warnings.filterwarnings("ignore", category=urllib3.exceptions.HTTPWarning)
+
+# Silenciar el logger de urllib3
+logging.getLogger("urllib3").setLevel(logging.ERROR)
+logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -141,9 +155,7 @@ class WebScrapingService:
             # Verificar si la empresa tiene URL
             url = company.get('url')
             
-            # Variable para almacenar si se encontró una URL válida
-            url_encontrada = False
-            
+              
             # Si tiene URL, verificarla primero
             if url and url.strip():
                 print(f"Verificando URL original: {url}")
@@ -230,34 +242,48 @@ class WebScrapingService:
         words = clean_name.split('-')
         
         # Determinar dominios basados en provincia
-        domains = ['.es', '.com']
+        domains = ['.es', '.com', '.net', '.org']
         if provincia:
             provincia_norm = unicodedata.normalize('NFKD', str(provincia)).encode('ASCII', 'ignore').decode()
-            if provincia_norm.upper() in ['BARCELONA', 'TARRAGONA', 'LERIDA', 'GIRONA']:
+            if provincia_norm.upper() in ['BARCELONA', 'TARRAGONA', 'LERIDA', 'GIRONA', 'GERONA', 'LLEIDA']:
                 domains.append('.cat')
-            elif provincia_norm.upper() in ['LA CORUNA', 'LUGO', 'ORENSE', 'PONTEVEDRA']:
+            elif provincia_norm.upper() in ['LA CORUNA', 'LUGO', 'ORENSE', 'PONTEVEDRA', 'A CORUÑA', 'OURENSE']:
                 domains.append('.gal')
-            elif provincia_norm.upper() in ['ALAVA', 'VIZCAYA', 'GUIPUZCOA']:
+            elif provincia_norm.upper() in ['ALAVA', 'VIZCAYA', 'GUIPUZCOA', 'ARABA', 'BIZKAIA', 'GIPUZKOA']:
                 domains.append('.eus')
 
         # Generar combinaciones de nombres
         name_combinations = []
         
-        # Nombre completo
-        name_combinations.append(clean_name)
+        
+        
+        # Nombre completo sin guiones (todo junto)
+        name_combinations.append(clean_name.replace('-', ''))
         
         # Primeras palabras si hay más de una
         if len(words) > 1:
             # Primera palabra
             name_combinations.append(words[0])
             
-            # Dos primeras palabras
+            # Dos primeras palabras - con guiones
             if len(words) > 2:
                 name_combinations.append('-'.join(words[:2]))
-                
-            # Tres primeras palabras
+                # Dos primeras palabras - sin guiones
+                name_combinations.append(''.join(words[:2]))
+            
+            # Tres primeras palabras - con guiones
             if len(words) > 3:
                 name_combinations.append('-'.join(words[:3]))
+                # Tres primeras palabras - sin guiones
+                name_combinations.append(''.join(words[:3]))
+                
+            # Cuatro primeras palabras - con guiones
+            if len(words) > 4:
+                name_combinations.append('-'.join(words[:4]))
+                # Cuatro primeras palabras - sin guiones
+                name_combinations.append(''.join(words[:4]))
+                
+            
         
         # Generar las URLs combinando nombres y dominios
         for name in name_combinations:
@@ -272,61 +298,102 @@ class WebScrapingService:
 
     @staticmethod
     def verify_domain(url: str) -> bool:
-        """Verifica si un dominio existe"""
+        """Verifica si un dominio existe usando múltiples métodos"""
         try:
             domain = url.replace('https://', '').replace('http://', '')
             if domain.startswith('www.'):
                 base_domain = domain[4:]
             else:
                 base_domain = domain
-                
+                    
             # Si no hay un punto en el dominio, no es un dominio válido
             if '.' not in base_domain:
                 return False
-                
+                    
             # Extraer solo el nombre de dominio sin la ruta
             base_domain = base_domain.split('/')[0]
-
-            # Método 1: Resolver DNS
-            try:
-                dns.resolver.resolve(base_domain, 'A')
-                return True
-            except:
-                pass
             
-            # Método 2: Intento alternativo con www
+            # Lista de servidores DNS para pruebas
+            dns_servers = [
+                ['8.8.8.8', '8.8.4.4'],  # Google DNS
+                ['1.1.1.1', '1.0.0.1'],  # Cloudflare DNS
+                ['9.9.9.9', '149.112.112.112'],  # Quad9
+                ['208.67.222.222', '208.67.220.220'],  # OpenDNS
+                []  # DNS del sistema (como fallback)
+            ]
+            
+            # Método 1: Probar con pool de servidores DNS
+            for nameservers in dns_servers:
+                try:
+                    resolver = dns.resolver.Resolver()
+                    if nameservers:  # Si hay servidores específicos
+                        resolver.nameservers = nameservers
+                    resolver.timeout = 2
+                    resolver.lifetime = 2
+                    
+                    resolver.resolve(base_domain, 'A')
+                    return True
+                except Exception as e:
+                    # Intentar con www si no lo tiene
+                    if not domain.startswith('www.'):
+                        try:
+                            resolver = dns.resolver.Resolver()
+                            if nameservers:
+                                resolver.nameservers = nameservers
+                            resolver.timeout = 2
+                            resolver.lifetime = 2
+                            
+                            resolver.resolve('www.' + base_domain, 'A')
+                            return True
+                        except:
+                            pass  # Continuar con el siguiente servidor DNS
+                    continue  # Probar con el siguiente servidor DNS
+            
+            # Método 2: Usar socket como fallback
             try:
-                dns.resolver.resolve('www.' + base_domain, 'A')
-                return True
-            except:
-                pass
-                
-            # Método 3: Usar socket
-            try:
+                socket.setdefaulttimeout(3)
                 socket.gethostbyname(base_domain)
                 return True
             except:
-                pass
-                
-            # Método 4: Intento directo HTTP
+                # Probar con www si no lo tiene
+                if not domain.startswith('www.'):
+                    try:
+                        socket.gethostbyname('www.' + base_domain)
+                        return True
+                    except:
+                        pass
+            
+            # Método 3: Verificación HTTP como último recurso
             try:
                 headers = {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'
                 }
-                response = requests.head(
+                # Configurar una sesión con reintentos
+                session = requests.Session()
+                retry = Retry(
+                    total=2,
+                    backoff_factor=0.5,
+                    status_forcelist=[500, 502, 503, 504]
+                )
+                adapter = HTTPAdapter(max_retries=retry)
+                session.mount('http://', adapter)
+                session.mount('https://', adapter)
+                
+                # Intentar HTTPS
+                response = session.head(
                     f"https://{base_domain}", 
                     timeout=5, 
                     headers=headers, 
                     allow_redirects=True,
                     verify=False
                 )
-                if response.status_code < 500:  # Aceptar incluso códigos de error como 403, 404 como dominios válidos
+                if response.status_code < 500:  # Aceptar incluso códigos de error como 403, 404
                     return True
             except:
-                # Intentar con www. si falló el anterior
+                # Intentar con HTTP
                 try:
-                    response = requests.head(
-                        f"https://www.{base_domain}", 
+                    response = session.head(
+                        f"http://{base_domain}", 
                         timeout=5, 
                         headers=headers, 
                         allow_redirects=True,
@@ -335,11 +402,37 @@ class WebScrapingService:
                     if response.status_code < 500:
                         return True
                 except:
-                    pass
-                    
+                    # Intentar con www si no lo tiene
+                    if not domain.startswith('www.'):
+                        try:
+                            response = session.head(
+                                f"https://www.{base_domain}", 
+                                timeout=5, 
+                                headers=headers, 
+                                allow_redirects=True,
+                                verify=False
+                            )
+                            if response.status_code < 500:
+                                return True
+                        except:
+                            try:
+                                response = session.head(
+                                    f"http://www.{base_domain}", 
+                                    timeout=5, 
+                                    headers=headers, 
+                                    allow_redirects=True,
+                                    verify=False
+                                )
+                                if response.status_code < 500:
+                                    return True
+                            except:
+                                pass
+            
+            # Si ninguno de los métodos funcionó, el dominio no es válido
             return False
+                        
         except Exception as e:
-            print(f"Error verificando dominio {url}: {str(e)}")
+            print(f"Error general verificando dominio {url}: {str(e)}")
             return False
 
     def verify_urls_parallel(self, urls: Set[str], company: Dict) -> Dict[str, Dict]:
@@ -392,26 +485,31 @@ class WebScrapingService:
     
     def choose_best_url(self, url_results: Dict[str, Dict]) -> Tuple[str, Dict]:
         """
-        Elige la mejor URL basada en puntuación
+        Elige la mejor URL basada en puntuación, solo considerando puntuaciones positivas
         """
         if not url_results:
             return None, {}
             
         # Encontrar la URL con la puntuación más alta
         best_url = None
-        best_score = -1
+        best_score = 0  # Inicializar en 0 para solo considerar puntuaciones positivas
         best_data = {}
         
         for url, data in url_results.items():
             score = data.get('score', 0)
             print(f"URL: {url} - Puntuación: {score}")
             
+            # Solo considerar URLs con puntuación positiva
             if score > best_score:
                 best_score = score
                 best_url = url
                 best_data = data
         
-        print(f"Mejor URL seleccionada: {best_url} con puntuación {best_score}")
+        if best_url:
+            print(f"Mejor URL seleccionada: {best_url} con puntuación {best_score}")
+        else:
+            print("No se encontró ninguna URL con puntuación positiva")
+        
         return best_url, best_data
 
     def score_website(self, url: str, soup: BeautifulSoup, company: Dict) -> int:
@@ -429,14 +527,38 @@ class WebScrapingService:
             clean_name = self.clean_company_name(company_name)
             words = clean_name.split('-')
             
-            # Si el nombre completo aparece exactamente, alta puntuación
-            if company_name in full_text:
-                score += 10
+            # Extraer elementos clave
+            title = soup.title.text.lower() if soup.title else ""
             
-            # Si aparecen partes significativas del nombre
+            # Meta description
+            meta_desc = ""
+            meta_tag = soup.find('meta', attrs={'name': 'description'})
+            if meta_tag and 'content' in meta_tag.attrs:
+                meta_desc = meta_tag['content'].lower()
+            
+            # Encabezados H1
+            h1_texts = [h1.text.lower() for h1 in soup.find_all('h1')]
+            
+            # Combinar textos clave
+            key_elements_text = title + " " + meta_desc + " " + " ".join(h1_texts)
+            
+            # Verificar coincidencia exacta en elementos clave
+            if company_name in key_elements_text:
+                score += 15  # Mayor puntuación por aparecer en elementos clave
+            
+            # Verificar coincidencias parciales
             for word in words:
-                if len(word) > 3 and word in full_text:
-                    score += 2
+                if len(word) > 3 and word in key_elements_text:
+                    score += 3  # Mayor puntuación por palabras en elementos clave
+            
+            # Para el resto del texto, mantener la lógica actual pero con menor peso
+            full_text = soup.get_text().lower()
+            if company_name in full_text:
+                score += 5  # Puntuación menor por aparecer en el texto general
+            
+            for word in words:
+                if len(word) > 3 and word in full_text and word not in key_elements_text:
+                    score += 1  # Menor puntuación para coincidencias en texto general
         
         # 2. Verificar si la provincia aparece
         if company.get('nom_provincia'):
@@ -454,7 +576,7 @@ class WebScrapingService:
         if company.get('nif'):
             nif = company['nif'].lower()
             if nif in full_text:
-                score += 15  # Alta puntuación, muy específico
+                score += 100  # Alta puntuación, muy específico
         
         # 5. Verificar si la dirección aparece
         if company.get('domicilio'):
@@ -518,6 +640,23 @@ class WebScrapingService:
         for term in directory_terms:
             if term in full_text:
                 score -= 10
+        # 13. Penalizar si es un dominio que está en venta
+        domain_in_sale_terms = [
+    
+            "dominio en venta", "comprar este dominio", "este dominio está en venta",  
+            "venta de dominio", "adquiere este dominio", "domain for sale", "buy this domain", "this domain is for sale",  
+            "domain available", "this domain is available", "domain auction", "bid on this domain",  
+            "purchase this domain"
+        ]
+        
+        for term in domain_in_sale_terms:
+            if term in full_text:
+                score -= 10
+                
+        domain = urlparse(url).netloc.lower()
+        if domain.endswith('.org') or domain.endswith('.net'):
+            score -= 10
+            print(f"Penalización por dominio .org/.net: -10 puntos para {url}")
         
         print(f"Puntuación para {url}: {score}")
         return score
@@ -533,9 +672,6 @@ class WebScrapingService:
         print(f"🌍 URL original: {url}")
 
         session = requests.Session()
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'
-        }
 
         try:
             # Estructura inicial de datos
@@ -562,46 +698,153 @@ class WebScrapingService:
                 url = 'https://' + url
             print(f"🔗 URL normalizada: {url}")
 
-            # Verificar si la URL existe (DNS lookup)
+            # Verificar si la URL existe usando el método mejorado
             domain = urlparse(url).netloc
             base_domain = domain[4:] if domain.startswith('www.') else domain
 
             print(f"🔍 Verificando dominio: {base_domain}")
-            try:
-                dns.resolver.resolve(base_domain, 'A')
-                print("✅ Dominio válido (DNS)")
-                domain_exists = True
-            except:
+            
+            # Lista de servidores DNS para pruebas
+            dns_servers = [
+                ['8.8.8.8', '8.8.4.4'],  # Google DNS
+                ['1.1.1.1', '1.0.0.1'],  # Cloudflare DNS
+                ['9.9.9.9', '149.112.112.112'],  # Quad9
+                []  # DNS del sistema (como fallback)
+            ]
+            
+            domain_exists = False
+            
+            # Método 1: Probar con pool de servidores DNS
+            for nameservers in dns_servers:
                 try:
-                    dns.resolver.resolve('www.' + base_domain, 'A')
-                    print("✅ Dominio válido (DNS con www)")
+                    resolver = dns.resolver.Resolver()
+                    if nameservers:  # Si hay servidores específicos
+                        resolver.nameservers = nameservers
+                        dns_name = nameservers[0]
+                    else:
+                        dns_name = "Local"
+                        
+                    resolver.timeout = 2
+                    resolver.lifetime = 2
+                    
+                    answers = resolver.resolve(base_domain, 'A')
+                    ips = [rdata.address for rdata in answers]
+                    print(f"✅ Dominio válido con DNS {dns_name}: {base_domain} -> {ips}")
                     domain_exists = True
-                except:
-                    try:
-                        socket.gethostbyname(base_domain)
-                        print("✅ Dominio válido (Socket)")
-                        domain_exists = True
-                    except:
-                        print("❌ Dominio no válido")
-                        domain_exists = False
-
-            if not domain_exists:
-                # Try a direct HTTP request as a fallback
-                try:
-                    print("🔄 Intentando verificación HTTP como alternativa...")
-                    fallback_response = requests.head(
-                        url, 
-                        timeout=5,
-                        verify=False,
-                        headers=headers,
-                        allow_redirects=True
-                    )
-                    if fallback_response.status_code < 500:
-                        domain_exists = True
-                        print(f"✅ Dominio válido (verificación HTTP): status code {fallback_response.status_code}")
+                    break  # Salir del bucle si tiene éxito
                 except Exception as e:
-                    print(f"❌ Verificación HTTP falló: {str(e)}")
-                    domain_exists = False
+                    print(f"❌ Error con DNS {nameservers[0] if nameservers else 'Local'}: {type(e).__name__}")
+                    # Intentar con www si no lo tiene
+                    if not domain.startswith('www.'):
+                        try:
+                            resolver = dns.resolver.Resolver()
+                            if nameservers:
+                                resolver.nameservers = nameservers
+                            resolver.timeout = 2
+                            resolver.lifetime = 2
+                            
+                            answers = resolver.resolve('www.' + base_domain, 'A')
+                            ips = [rdata.address for rdata in answers]
+                            print(f"✅ Dominio válido con www usando DNS {dns_name}: www.{base_domain} -> {ips}")
+                            domain_exists = True
+                            break  # Salir del bucle si tiene éxito
+                        except:
+                            pass  # Continuar con el siguiente servidor DNS
+            
+            # Método 2: Usar socket como fallback si DNS falló
+            if not domain_exists:
+                try:
+                    socket.setdefaulttimeout(3)
+                    ip = socket.gethostbyname(base_domain)
+                    print(f"✅ Dominio válido usando socket: {base_domain} -> {ip}")
+                    domain_exists = True
+                except Exception as e:
+                    print(f"❌ Error con socket: {type(e).__name__}")
+                    # Probar con www si no lo tiene
+                    if not domain.startswith('www.'):
+                        try:
+                            ip = socket.gethostbyname('www.' + base_domain)
+                            print(f"✅ Dominio válido con www usando socket: www.{base_domain} -> {ip}")
+                            domain_exists = True
+                        except:
+                            pass
+            
+            # Método 3: Verificación HTTP como último recurso
+            if not domain_exists:
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'
+                }
+                try:
+                    # Configurar una sesión con reintentos
+                    retry_session = requests.Session()
+                    retry = Retry(
+                        total=2,
+                        backoff_factor=0.5,
+                        status_forcelist=[500, 502, 503, 504]
+                    )
+                    adapter = HTTPAdapter(max_retries=retry)
+                    retry_session.mount('http://', adapter)
+                    retry_session.mount('https://', adapter)
+                    
+                    # Intentar HTTPS
+                    print(f"Intentando verificación HTTPS para {base_domain}...")
+                    response = retry_session.head(
+                        f"https://{base_domain}", 
+                        timeout=5, 
+                        headers=headers, 
+                        allow_redirects=True,
+                        verify=False
+                    )
+                    if response.status_code < 500:  # Aceptar incluso códigos de error como 403, 404
+                        print(f"✅ Dominio válido mediante petición HTTPS: {base_domain} (Status: {response.status_code})")
+                        domain_exists = True
+                except Exception as e:
+                    print(f"❌ Error con petición HTTPS: {type(e).__name__}")
+                    # Intentar con HTTP
+                    try:
+                        print(f"Intentando verificación HTTP para {base_domain}...")
+                        response = retry_session.head(
+                            f"http://{base_domain}", 
+                            timeout=5, 
+                            headers=headers, 
+                            allow_redirects=True,
+                            verify=False
+                        )
+                        if response.status_code < 500:
+                            print(f"✅ Dominio válido mediante petición HTTP: {base_domain} (Status: {response.status_code})")
+                            domain_exists = True
+                    except Exception as e:
+                        print(f"❌ Error con petición HTTP: {type(e).__name__}")
+                        # Intentar con www si no lo tiene
+                        if not domain.startswith('www.'):
+                            try:
+                                print(f"Intentando verificación HTTPS para www.{base_domain}...")
+                                response = retry_session.head(
+                                    f"https://www.{base_domain}", 
+                                    timeout=5, 
+                                    headers=headers, 
+                                    allow_redirects=True,
+                                    verify=False
+                                )
+                                if response.status_code < 500:
+                                    print(f"✅ Dominio válido mediante petición HTTPS con www: www.{base_domain} (Status: {response.status_code})")
+                                    domain_exists = True
+                            except Exception as e:
+                                print(f"❌ Error con petición HTTPS con www: {type(e).__name__}")
+                                try:
+                                    print(f"Intentando verificación HTTP para www.{base_domain}...")
+                                    response = retry_session.head(
+                                        f"http://www.{base_domain}", 
+                                        timeout=5, 
+                                        headers=headers, 
+                                        allow_redirects=True,
+                                        verify=False
+                                    )
+                                    if response.status_code < 500:
+                                        print(f"✅ Dominio válido mediante petición HTTP con www: www.{base_domain} (Status: {response.status_code})")
+                                        domain_exists = True
+                                except Exception as e:
+                                    print(f"❌ Error con petición HTTP con www: {type(e).__name__}")
 
             if not domain_exists:
                 data.update({
@@ -838,7 +1081,7 @@ class WebScrapingService:
         text_content = soup.get_text()
         prices = re.findall(price_pattern, text_content, re.IGNORECASE)
         if prices:
-            score += 2
+            score += 0.5
             evidence.append(f"Precios encontrados: {len(prices)} ocurrencias")
         
         is_ecommerce = score >= 5
