@@ -105,8 +105,14 @@ class ScrapingDashboard:
         total = self.db.execute_query(total_query)
         processed = self.db.execute_query(processed_query)
         
-        # Calcular progreso
-        progress = (processed / total) * 100 if total > 0 else 0
+        # Calcular progreso - asegurarse de que los valores son números
+        if isinstance(total, (int, float)) and isinstance(processed, (int, float)):
+            progress = (processed / total) * 100 if total > 0 else 0
+        else:
+            # Manejar caso donde los valores no son numéricos
+            total = 0
+            processed = 0
+            progress = 0    
         
         return {
             'total': total,
@@ -210,17 +216,17 @@ class ScrapingDashboard:
 
     def reload_pending_tasks(self):
         """Recarga las tareas pendientes desde la base de datos"""
-        # Consulta para obtener todas las empresas no procesadas
-        query = """
-        SELECT cod_infotel, razon_social, url
-        FROM sociedades
-        WHERE processed = FALSE
-        """
-        
+
         try:
+            # Consulta para obtener todas las empresas no procesadas
+            query = """
+            SELECT cod_infotel, razon_social, url
+            FROM sociedades
+            WHERE processed = FALSE
+            """            
             # Obtener los datos
             pending_tasks = self.db.execute_query(query, return_df=True)
-            
+                
             if pending_tasks is None or pending_tasks.empty:
                 st.session_state.task_reload_message = "No hay tareas pendientes para recargar"
                 self.increment_refresh_counter()
@@ -236,7 +242,7 @@ class ScrapingDashboard:
                 }
                 
                 # Agregar a la cola usando el task_manager
-                self.task_manager.enqueue_task(task_data)
+                self.task_manager.enqueue_tasks(task_data)
                 count += 1
             
             # Agregar mensaje de éxito y actualizar contador (del nuevo código)
@@ -550,30 +556,42 @@ class ScrapingDashboard:
     def run(self):
         """Ejecuta el dashboard"""
         st.title("🕸️ Dashboard de Scraping Distribuido")
-        
+
         # Sidebar
         with st.sidebar:
             st.header("Controles")
-            
+
             # Botón de actualización manual
             if st.button("Actualizar Datos", key="refresh_button"):
                 self.increment_refresh_counter()
-                st.success("Datos actualizados correctamente")
-            
-            st.info(f"Última actualización: {st.session_state.last_refresh.strftime('%H:%M:%S')}")
-            
+                st.session_state.last_refresh = time.strftime('%H:%M:%S')
+                st.success(f"Datos actualizados correctamente ({st.session_state.last_refresh})")
+
+            # Muestra la última actualización
+            if "last_refresh" not in st.session_state:
+                st.session_state.last_refresh = time.strftime('%H:%M:%S')
+            st.info(f"Última actualización: {st.session_state.last_refresh}")
+
             # Control de auto-refresh
+            if "auto_refresh" not in st.session_state:
+                st.session_state.auto_refresh = False
+
             auto_refresh = st.checkbox("Auto-refresh", value=st.session_state.auto_refresh)
             if auto_refresh != st.session_state.auto_refresh:
-                self.toggle_auto_refresh()
-            
+                st.session_state.auto_refresh = auto_refresh
+
             refresh_interval = st.slider(
                 "Intervalo de actualización (segundos)", 
-                min_value=5, 
+                min_value=1, 
                 max_value=60, 
-                value=10,
+                value=5,
                 disabled=not st.session_state.auto_refresh
             )
+
+            # Si auto-refresh está activado, actualizar automáticamente
+            if st.session_state.auto_refresh:
+                time.sleep(refresh_interval)  # Espera el intervalo definido
+                #st.experimental_set_query_params(refresh=str(time.time()))  # Fuerz
             
             # Añadir opciones para cargar datos
             st.subheader("Administración")
