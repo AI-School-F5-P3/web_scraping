@@ -23,10 +23,17 @@ from config import DB_CONFIG, TIMEOUT_CONFIG
 import urllib3
 import warnings
 
-# Silenciar warnings de conexiones HTTP
+# Configurar silenciamiento de warnings y logging
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
-warnings.filterwarnings("ignore", message="Retrying.*getaddrinfo failed")
+warnings.filterwarnings("ignore", message=".*Retrying.*")  # Captura todos los mensajes de reintento
+warnings.filterwarnings("ignore", message=".*getaddrinfo failed.*")
+warnings.filterwarnings("ignore", category=urllib3.exceptions.HTTPWarning)
+warnings.filterwarnings("ignore", category=requests.exceptions.RequestException)
+
+# Silenciar el logger de urllib3
+logging.getLogger("urllib3").setLevel(logging.ERROR)
+logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -148,9 +155,7 @@ class WebScrapingService:
             # Verificar si la empresa tiene URL
             url = company.get('url')
             
-            # Variable para almacenar si se encontró una URL válida
-            url_encontrada = False
-            
+              
             # Si tiene URL, verificarla primero
             if url and url.strip():
                 print(f"Verificando URL original: {url}")
