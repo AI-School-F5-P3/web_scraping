@@ -11,6 +11,7 @@ from scraping import ProWebScraper
 import unicodedata
 from dataclasses import dataclass, field
 from enum import Enum
+from thefuzz import fuzz, process
 
 class CustomLLM(LLM):
     def __init__(self, model_name: str, provider: str = "groq"):
@@ -182,11 +183,8 @@ Output: {
             "e-commerce", "ecommerce", "tienda online"
         ])
 
-        # Extract province
-        for province in self.get_provinces():
-            if province.lower() in query_normalized:
-                ctx.province = province
-                break
+        # Extract province using fuzzy matching
+        ctx.province = self.extract_province_fuzzy(query_normalized)
 
         # Extract limit
         match = re.search(r'\b(\d+)\b', query)
@@ -194,6 +192,30 @@ Output: {
             ctx.limit = int(match.group(1))
 
         return ctx
+    
+    def extract_province_fuzzy(self, query_normalized: str) -> Optional[str]:
+        """Extracts province from query using fuzzy matching"""
+        # First try direct substring matching
+        for province in PROVINCIAS_ESPANA:
+            if self.remove_accents(province.lower()) in query_normalized:
+                return province
+        
+        # If no direct match, try fuzzy matching
+        words = query_normalized.split()
+        
+        for word in words:
+            if len(word) > 3:  # Only consider words longer than 3 chars
+                matches = process.extract(
+                    word, 
+                    [self.remove_accents(p.lower()) for p in PROVINCIAS_ESPANA], 
+                    scorer=fuzz.ratio,
+                    limit=1
+                )
+                if matches and matches[0][1] > 80:  # Match above 80% threshold
+                    idx = [self.remove_accents(p.lower()) for p in PROVINCIAS_ESPANA].index(matches[0][0])
+                    return PROVINCIAS_ESPANA[idx]
+        
+        return None
 
     def generate_query(self, natural_query: str) -> Dict[str, Any]:
         """Generates SQL query from natural language input"""
@@ -235,6 +257,7 @@ Output: {
         where_clauses = self.build_where_clauses(ctx)
         base_where = where_clauses.replace("WHERE ", "") if where_clauses else "TRUE"
 
+        # Ensure we handle empty results better
         sql = f"""
         WITH total AS (
             SELECT COUNT(*) AS total_count 
@@ -243,7 +266,11 @@ Output: {
         )
         SELECT 
             COUNT(*) AS filtered_count,
-            ROUND(COUNT(*) * 100.0 / total.total_count, 2) AS percentage
+            CASE 
+                WHEN (SELECT total_count FROM total) > 0 
+                THEN ROUND(COUNT(*) * 100.0 / (SELECT total_count FROM total), 2)
+                ELSE 0
+            END AS percentage
         FROM sociedades, total
         {where_clauses}
         """
@@ -278,6 +305,15 @@ Output: {
         
         columns = ctx.specified_columns or self.ALLOWED_COLUMNS
         columns_str = ", ".join(columns)
+        
+        # Special handling for company-specific queries
+        if hasattr(ctx, 'company_name') and ctx.company_name:
+            # Add company name filter
+            company_clause = f"razon_social ILIKE '%{ctx.company_name}%'"
+            if where_clauses:
+                where_clauses += f" AND {company_clause}"
+            else:
+                where_clauses = f"WHERE {company_clause}"
         
         sql = f"""
         SELECT {columns_str}

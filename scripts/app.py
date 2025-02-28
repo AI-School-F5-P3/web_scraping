@@ -20,11 +20,12 @@ import logging
 from agents import DBAgent
 from database import DatabaseManager
 from scraping import ProWebScraper
-from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA, SQL_MODELS, SCRAPING_MODELS, DB_CONFIG
+from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA, SQL_MODELS, DB_CONFIG
 from agents import CustomLLM
 from scraping_flow import WebScrapingService
 import os
 from dashboard import ScrapingDashboard
+from rag_system import FinancialRAGSystem
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -37,6 +38,8 @@ class EnterpriseApp:
         self.setup_agents()
         # Initialize the scraping dashboard
         self.scraping_dashboard = ScrapingDashboard(use_sidebar=False)
+        # Initialize the RAG system
+        self.setup_rag_system()
         # Load data from DB if session_state is empty
         self.load_data_from_db()    
         
@@ -66,11 +69,28 @@ class EnterpriseApp:
         # Initialize with default models from config
         if "sql_model" not in st.session_state:
             st.session_state.sql_model = list(SQL_MODELS.keys())[0]
-        if "scraping_model" not in st.session_state:
-            st.session_state.scraping_model = list(SCRAPING_MODELS.keys())[0]
         # Add active tab tracking
         if "active_tab" not in st.session_state:
             st.session_state.active_tab = 0
+        # Chat history for the query interface
+        if "chat_history" not in st.session_state:
+            st.session_state.chat_history = []
+        # Current company context for RAG queries
+        if "current_company" not in st.session_state:
+            st.session_state.current_company = None
+        # RAG system model selection
+        if "rag_model" not in st.session_state:
+            st.session_state.rag_model = list(SQL_MODELS.keys())[0]  # Use SQL models for RAG too
+            
+    def setup_rag_system(self):
+        """Initialize the Financial RAG System"""
+        try:
+            # Create the RAG system with selected model
+            self.rag_system = FinancialRAGSystem(
+                groq_model=SQL_MODELS.get(st.session_state.rag_model, st.session_state.rag_model)
+            )
+        except Exception as e:
+            st.error(f"Error setting up RAG system: {str(e)}")
             
     def load_data_from_db(self):
         """Load data from database if session is empty"""
@@ -125,10 +145,27 @@ class EnterpriseApp:
                     help="Select Groq model for SQL queries"
                 )
                 
+                # Add RAG model selection
+                selected_rag_model = st.selectbox(
+                    "Financial Information Model",
+                    list(SQL_MODELS.keys()),
+                    index=0,
+                    help="Select Groq model for financial information"
+                )
+                
                 # Update models if changed
+                models_changed = False
                 if selected_sql_model != st.session_state.sql_model:
                     st.session_state.sql_model = selected_sql_model
+                    models_changed = True
+                    
+                if selected_rag_model != st.session_state.rag_model:
+                    st.session_state.rag_model = selected_rag_model
+                    models_changed = True
+                    
+                if models_changed:
                     self.setup_agents()
+                    self.setup_rag_system()
                 
                 # File Upload Section
                 st.subheader("📤 Data Upload")
@@ -168,10 +205,10 @@ class EnterpriseApp:
         self.scraping_dashboard._render_sidebar_controls()
 
     def render_main_content(self):
-        st.title("Business Analysis System 🏢")
+        st.title("Sistema de Análisis Empresarial 🏢")
         
         # Use a radio button that looks like tabs
-        tab_options = ["📊  DASHBOARD  ", "🔍  QUERIES  ", "🌐  WEB SCRAPING  "]
+        tab_options = ["📊  DASHBOARD  ", "🔍  CONSULTAS  ", "🌐  WEB SCRAPING  "]
         
         # Get the previously selected tab
         prev_tab_index = st.session_state.active_tab
@@ -331,34 +368,216 @@ class EnterpriseApp:
             self.generate_analysis(analysis_type)
 
     def render_queries(self):
-        """Render queries section (SQL)"""
-        st.subheader("🔍 Advanced Queries (SQL)")
-
-        query = st.text_area(
-            "Write your query in natural language",
-            placeholder="Example: Give me the first 10 companies in Madrid",
-            help="Will be translated to an SQL query"
-        )
-
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            execute_button = st.button("Execute Query")
-        with col2:
-            st.checkbox("Show SQL", value=False, key="show_sql")
+        """Render unified query interface for both SQL and RAG queries"""
+        st.subheader("🔍 Advanced Queries")
         
-        if execute_button and query:
-            self.process_query(query)
+        # Create a container for the query input
+        query_container = st.container()
+        
+        # Create tabs for chat history and configuration
+        chat_tab, config_tab = st.tabs(["Consultas", "Configuración"])
+        
+        with config_tab:
+            st.checkbox("Show SQL", value=False, key="show_sql", 
+                        help="Display the SQL query generated from your natural language question")
             
-        # Show results only if we have a last query
-        last_query = st.session_state.get("last_query", None)
-        if last_query and "results" in last_query:
-            if st.session_state.show_sql and "sql" in last_query:
-                st.code(last_query["sql"], language="sql")
+            # Add clear history button
+            if st.button("Borrar historial de consultas"):
+                st.session_state.chat_history = []
+                st.success("Historial de consultas borrado")
+                st.experimental_rerun()
+            
+            # Company context for RAG queries
+            if st.session_state.current_batch is not None and not st.session_state.current_batch['data'].empty:
+                # Get unique company names
+                df = st.session_state.current_batch['data']
+                company_names = df['razon_social'].dropna().unique().tolist()
                 
-        # Show explanation if available
-        if last_query and "explanation" in last_query and last_query["explanation"]:
-            with st.expander("LLM Explanation"):
-                st.write(last_query["explanation"])
+                if company_names:
+                    selected_company = st.selectbox(
+                        "Select a company for detailed financial information",
+                        ["None"] + company_names,
+                        index=0,
+                        help="Select a company to ask specific financial questions about it"
+                    )
+                    
+                    if selected_company != "None":
+                        st.session_state.current_company = selected_company
+                        # Add a button to search for financial information
+                        if st.button("Search Financial Information"):
+                            with st.spinner(f"Searching financial information for {selected_company}..."):
+                                company_info = self.rag_system.search_company_info(selected_company)
+                                if company_info:
+                                    st.success(f"Found financial information for {selected_company}")
+                                    st.json(company_info)
+                                else:
+                                    st.warning(f"No financial information found for {selected_company}")
+                    else:
+                        st.session_state.current_company = None
+        
+        with chat_tab:
+            # Display chat history
+            for message in reversed(st.session_state.chat_history):
+                role = message["role"]
+                content = message["content"]
+                
+                if role == "user":
+                    st.markdown(f"**👤 You:** {content}")
+                else:
+                    st.markdown(f"**🤖 Assistant:** {content}")
+                    
+                    # Show SQL if requested and available
+                    if st.session_state.show_sql and "sql" in message:
+                        with st.expander("Generated SQL"):
+                            st.code(message["sql"], language="sql")
+                    
+                    # Show data if available
+                    if "data" in message and message["data"] is not None:
+                        with st.expander("Data Results"):
+                            st.dataframe(message["data"])
+            
+        # Query input
+        with query_container:
+            query = st.text_area(
+                "Escribe tu consulta en lenguaje natural",
+                placeholder="Ejemplo: Dame las primeras 10 empresas en Madrid, o ¿Cuál es la información financiera de Empresa X?",
+                help="Se traducirá a una consulta SQL o recuperará información financiera"
+            )
+            
+            if st.button("Enviar Consulta"):
+                if query:
+                    # Add user message to chat history
+                    st.session_state.chat_history.append({"role": "user", "content": query})
+                    
+                    # Process the query
+                    self.process_unified_query(query)
+                    
+                    # Rerun to update the UI
+                    st.experimental_rerun()
+
+    def process_unified_query(self, query: str):
+        """Process a unified query - handle both SQL and RAG responses"""
+        # Check if it's explicitly asking about a company
+        company_pattern = re.compile(r'sobre\s+([A-Za-z0-9\s]+)', re.IGNORECASE)
+        company_match = company_pattern.search(query)
+        
+        # If a company is mentioned directly in the query, use it
+        if company_match:
+            company_name = company_match.group(1).strip()
+            
+            with st.spinner(f"Buscando información sobre {company_name}..."):
+                try:
+                    # Search for company info
+                    company_info = self.rag_system.search_company_info(company_name)
+                    
+                    # Set a token limit (e.g., 1000 tokens)
+                    MAX_TOKENS = 1000
+                    
+                    # Get RAG answer
+                    answer = self.rag_system.answer_financial_question(company_name, query)
+                    
+                    # Truncate answer if too long
+                    if len(answer.split()) > MAX_TOKENS:
+                        truncated_answer = " ".join(answer.split()[:MAX_TOKENS])
+                        truncated_answer += "... [Respuesta truncada por longitud]"
+                        answer = truncated_answer
+                    
+                    # Add assistant message to chat history
+                    st.session_state.chat_history.append({
+                        "role": "assistant", 
+                        "content": answer,
+                        "type": "financial",
+                        "company": company_name
+                    })
+                    return
+                except Exception as e:
+                    error_msg = f"Error buscando información: {str(e)}"
+                    st.session_state.chat_history.append({
+                        "role": "assistant", 
+                        "content": error_msg,
+                        "type": "error"
+                    })
+                    return
+        
+        # Otherwise check if a company is already selected in configuration
+        elif st.session_state.current_company and any(keyword in query.lower() for keyword in [
+            "financial", "finances", "revenue", "income", "profit", "empleados", 
+            "facturación", "ingresos", "beneficio", "financiera", "financieras", "financiero"
+        ]):
+            # Process using RAG for financial information
+            with st.spinner(f"Getting financial information for {st.session_state.current_company}..."):
+                try:
+                    answer = self.rag_system.answer_financial_question(
+                        st.session_state.current_company, query
+                    )
+                    
+                    # Add assistant message to chat history
+                    st.session_state.chat_history.append({
+                        "role": "assistant", 
+                        "content": answer,
+                        "type": "financial",
+                        "company": st.session_state.current_company
+                    })
+                except Exception as e:
+                    error_msg = f"Error getting financial information: {str(e)}"
+                    st.session_state.chat_history.append({
+                        "role": "assistant", 
+                        "content": error_msg,
+                        "type": "error"
+                    })
+            return
+            
+        # Otherwise process as a SQL query
+        try:
+            with st.spinner("Processing query..."):
+                # Generate query
+                query_info = self.db_agent.generate_query(query)
+                
+                # Check for errors
+                if query_info.get("error"):
+                    st.session_state.chat_history.append({
+                        "role": "assistant", 
+                        "content": query_info["error"],
+                        "type": "error"
+                    })
+                    return
+                    
+                # Execute query
+                results = self.db.execute_query(query_info["query"], return_df=True)
+                
+                # Generate response message
+                if query_info["query_type"] == "count":
+                    value = results.iloc[0, 0]
+                    response = f"Total: {value:,}"
+                elif query_info["query_type"] == "aggregate":
+                    response = "Aquí están los resultados de tu consulta:"
+                else:
+                    if results is not None and not results.empty:
+                        response = f"Encontré {len(results)} resultados para tu consulta:"
+                    else:
+                        response = "No se encontraron resultados para tu consulta."
+                
+                # Add explanation if available
+                if query_info.get("explanation"):
+                    response += f"\n\n{query_info['explanation']}"
+                
+                # Add assistant message to chat history
+                st.session_state.chat_history.append({
+                    "role": "assistant", 
+                    "content": response,
+                    "type": "sql",
+                    "sql": query_info["query"],
+                    "data": results,
+                    "query_type": query_info["query_type"]
+                })
+                    
+        except Exception as e:
+            error_msg = f"Error processing query: {str(e)}"
+            st.session_state.chat_history.append({
+                "role": "assistant", 
+                "content": error_msg,
+                "type": "error"
+            })
 
     def render_scraping(self):
         """Render web scraping section with integrated dashboard"""
