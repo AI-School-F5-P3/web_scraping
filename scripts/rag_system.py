@@ -118,14 +118,24 @@ class FinancialRAGSystem:
         Busca en línea información financiera pública de la empresa.
         Se utiliza una caché para evitar búsquedas repetitivas.
         """
-        cache_file = os.path.join(self.cache_dir, f"{self.sanitize_filename(company_name)}.json")
-        if os.path.exists(cache_file):
-            with open(cache_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        company_info = self._search_online(company_name)
-        with open(cache_file, 'w', encoding='utf-8') as f:
-            json.dump(company_info.to_dict(), f, ensure_ascii=False, indent=2)
-        return company_info.to_dict()
+        try:
+            cache_file = os.path.join(self.cache_dir, f"{self.sanitize_filename(company_name)}.json")
+            if os.path.exists(cache_file):
+                with open(cache_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            
+            # Normalize company name for better searching
+            normalized_name = company_name.strip().lower()
+            normalized_name = re.sub(r'\b(s\.a\.|s\.l\.|s\s*\.?\s*a\s*\.?|s\s*\.?\s*l\s*\.?)$', '', normalized_name).strip()
+            
+            company_info = self._search_online(normalized_name)
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(company_info.to_dict(), f, ensure_ascii=False, indent=2)
+            return company_info.to_dict()
+        except Exception as e:
+            print(f"Error searching company info: {str(e)}")
+            # Return minimal info to prevent errors
+            return {"name": company_name, "error": str(e)}
     
     def _search_online(self, company_name: str) -> CompanyFinancialInfo:
         """

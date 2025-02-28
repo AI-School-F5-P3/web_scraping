@@ -389,31 +389,38 @@ class EnterpriseApp:
             
             # Company context for RAG queries
             if st.session_state.current_batch is not None and not st.session_state.current_batch['data'].empty:
+                st.markdown("### Contexto para consultas financieras")
+                st.info("Selecciona una empresa para hacer preguntas específicas sobre su información financiera.")
+                
                 # Get unique company names
                 df = st.session_state.current_batch['data']
                 company_names = df['razon_social'].dropna().unique().tolist()
                 
                 if company_names:
                     selected_company = st.selectbox(
-                        "Select a company for detailed financial information",
-                        ["None"] + company_names,
+                        "Selecciona una empresa",
+                        ["Ninguna"] + company_names,
                         index=0,
-                        help="Select a company to ask specific financial questions about it"
+                        help="Selecciona una empresa para preguntas específicas sobre información financiera"
                     )
                     
-                    if selected_company != "None":
-                        st.session_state.current_company = selected_company
-                        # Add a button to search for financial information
-                        if st.button("Search Financial Information"):
-                            with st.spinner(f"Searching financial information for {selected_company}..."):
+                    if selected_company != "Ninguna":
+                        if st.button("Establecer como contexto actual"):
+                            st.session_state.current_company = selected_company
+                            st.success(f"✅ {selected_company} establecida como contexto actual")
+                            
+                            # Add a button to search for financial information
+                            with st.spinner(f"Buscando información financiera de {selected_company}..."):
                                 company_info = self.rag_system.search_company_info(selected_company)
-                                if company_info:
-                                    st.success(f"Found financial information for {selected_company}")
+                                if company_info and not company_info.get('error'):
+                                    st.success(f"Información financiera encontrada para {selected_company}")
                                     st.json(company_info)
                                 else:
-                                    st.warning(f"No financial information found for {selected_company}")
-                    else:
-                        st.session_state.current_company = None
+                                    st.warning(f"No se encontró información financiera para {selected_company}")
+                    elif st.session_state.current_company:
+                        if st.button("Limpiar contexto actual"):
+                            st.session_state.current_company = None
+                            st.success("Contexto limpiado")
         
         with chat_tab:
             # Display chat history
@@ -422,18 +429,29 @@ class EnterpriseApp:
                 content = message["content"]
                 
                 if role == "user":
-                    st.markdown(f"**👤 You:** {content}")
+                    st.markdown(f"""<div class="user-message">
+                                <strong>👤 Tú:</strong> {content}
+                                </div>""", unsafe_allow_html=True)
                 else:
-                    st.markdown(f"**🤖 Assistant:** {content}")
+                    # Check if it's an error or special message
+                    message_type = message.get("type", "normal")
+                    if message_type == "error" or (message_type == "sql" and "No se encontraron resultados" in content):
+                        st.markdown(f"""<div class="alert-message">
+                                    <strong>🤖 Asistente:</strong> {content}
+                                    </div>""", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""<div class="assistant-message">
+                                    <strong>🤖 Asistente:</strong> {content}
+                                    </div>""", unsafe_allow_html=True)
                     
                     # Show SQL if requested and available
                     if st.session_state.show_sql and "sql" in message:
-                        with st.expander("Generated SQL"):
+                        with st.expander("SQL Generado"):
                             st.code(message["sql"], language="sql")
                     
                     # Show data if available
                     if "data" in message and message["data"] is not None:
-                        with st.expander("Data Results"):
+                        with st.expander("Resultados"):
                             st.dataframe(message["data"])
             
         # Query input

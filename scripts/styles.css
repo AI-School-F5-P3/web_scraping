@@ -164,3 +164,37 @@ div.row-widget.stRadio > div > label:has(input:checked) span {
 .danger-metric {
     color: #dc3545;
 }
+
+/* Message styling for chat interface */
+.user-message {
+    background-color: #f0f2f6;
+    border-radius: 8px;
+    padding: 10px 15px;
+    margin-bottom: 10px;
+    border-left: 4px solid #4b6bfb;
+}
+
+.assistant-message {
+    background-color: #eef4ff;
+    border-radius: 8px;
+    padding: 10px 15px;
+    margin-bottom: 10px;
+    border-left: 4px solid #ff6b4b;
+}
+
+.alert-message {
+    background-color: #fff4e5;
+    border-radius: 8px;
+    padding: 10px 15px;
+    margin-bottom: 10px;
+    border-left: 4px solid #ff9800;
+}
+
+/* Spanish UI elements */
+.stButton>button {
+    font-weight: 500;
+}
+
+.stTextArea label {
+    font-weight: 500;
+}

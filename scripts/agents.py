@@ -200,22 +200,38 @@ Output: {
             if self.remove_accents(province.lower()) in query_normalized:
                 return province
         
-        # If no direct match, try fuzzy matching
+        # If no direct match, try fuzzy matching with better tokenization
+        # Extract potential location words (words that might be provinces)
+        potential_locations = []
         words = query_normalized.split()
         
+        # Single words
         for word in words:
             if len(word) > 3:  # Only consider words longer than 3 chars
-                matches = process.extract(
-                    word, 
-                    [self.remove_accents(p.lower()) for p in PROVINCIAS_ESPANA], 
-                    scorer=fuzz.ratio,
-                    limit=1
-                )
-                if matches and matches[0][1] > 80:  # Match above 80% threshold
-                    idx = [self.remove_accents(p.lower()) for p in PROVINCIAS_ESPANA].index(matches[0][0])
-                    return PROVINCIAS_ESPANA[idx]
+                potential_locations.append(word)
         
-        return None
+        # Word pairs (for multi-word provinces like "Las Palmas")
+        for i in range(len(words) - 1):
+            if len(words[i]) > 2 and len(words[i+1]) > 2:
+                potential_locations.append(f"{words[i]} {words[i+1]}")
+        
+        # Try fuzzy matching with all potential locations
+        best_match = None
+        best_score = 0
+        
+        for location in potential_locations:
+            matches = process.extract(
+                location, 
+                [self.remove_accents(p.lower()) for p in PROVINCIAS_ESPANA], 
+                scorer=fuzz.ratio,
+                limit=1
+            )
+            if matches and matches[0][1] > 75 and matches[0][1] > best_score:  # Lower threshold to 75%
+                best_score = matches[0][1]
+                idx = [self.remove_accents(p.lower()) for p in PROVINCIAS_ESPANA].index(matches[0][0])
+                best_match = PROVINCIAS_ESPANA[idx]
+        
+        return best_match
 
     def generate_query(self, natural_query: str) -> Dict[str, Any]:
         """Generates SQL query from natural language input"""
@@ -237,6 +253,11 @@ Output: {
                     "error": "Esta consulta no está relacionada con la base de datos de empresas"
                 }
 
+            # Add company extraction for company-specific queries
+            company_name = self.extract_company_name(natural_query)
+            if company_name:
+                ctx.company_name = company_name
+
             if ctx.query_type == QueryType.AGGREGATE:
                 return self.generate_aggregate_query(ctx)
             elif ctx.query_type == QueryType.COUNT:
@@ -245,12 +266,35 @@ Output: {
                 return self.generate_table_query(ctx)
 
         except Exception as e:
+            import traceback
+            trace = traceback.format_exc()
+            print(f"Error generating query: {str(e)}\n{trace}")
             return {
                 "query": None,
-                "explanation": None,
+                "explanation": f"Error al procesar la consulta: {str(e)}",
                 "error": str(e),
                 "query_type": "error"
             }
+
+    def extract_company_name(self, query: str) -> Optional[str]:
+        """Extract company name from query using patterns"""
+        patterns = [
+            r'empresa\s+([A-Za-z0-9\s]+)',
+            r'compañía\s+([A-Za-z0-9\s]+)',
+            r'sociedad\s+([A-Za-z0-9\s]+)',
+            r'información(?:\s+\w+){0,3}\s+de\s+([A-Za-z0-9\s]+)', 
+            r'datos(?:\s+\w+){0,3}\s+de\s+([A-Za-z0-9\s]+)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, query, re.IGNORECASE)
+            if match:
+                company_name = match.group(1).strip()
+                # Remove common company suffixes for better matching
+                company_name = re.sub(r'\b(S\.?A\.?|S\.?L\.?)$', '', company_name).strip()
+                return company_name
+        
+        return None
 
     def generate_aggregate_query(self, ctx: QueryContext) -> Dict[str, Any]:
         """Generates aggregate query with percentages"""
