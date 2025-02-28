@@ -104,7 +104,7 @@ class ScrapingDashboard:
         
         total = self.db.execute_query(total_query)
         processed = self.db.execute_query(processed_query)
-        
+
         # Calcular progreso - asegurarse de que los valores son números
         if isinstance(total, (int, float)) and isinstance(processed, (int, float)):
             progress = (processed / total) * 100 if total > 0 else 0
@@ -126,12 +126,13 @@ class ScrapingDashboard:
         SELECT worker_id, COUNT(*) as tasks, MAX(fecha_actualizacion) as last_update
         FROM sociedades
         WHERE worker_id IS NOT NULL
-          AND fecha_actualizacion > NOW() - INTERVAL '5 minutes'
+            AND fecha_actualizacion > NOW() - INTERVAL '5 minutes'
         GROUP BY worker_id
         ORDER BY last_update DESC
         """
         
         workers_df = self.db.execute_query(query, return_df=True)
+
         if not isinstance(workers_df, pd.DataFrame):
             workers_df = pd.DataFrame(columns=['worker_id'])  # Define columnas según la consulta
 
@@ -150,7 +151,7 @@ class ScrapingDashboard:
             COUNT(*) as count
         FROM sociedades
         WHERE fecha_actualizacion > NOW() - INTERVAL '24 hours'
-          AND worker_id IS NOT NULL
+            AND worker_id IS NOT NULL
         GROUP BY worker_id, DATE_TRUNC('hour', fecha_actualizacion)
         ORDER BY hour
         """
@@ -406,95 +407,51 @@ class ScrapingDashboard:
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            # Gráfico de tasa de procesamiento por worker
-            rates_df = self.get_processing_rates()
+            """Renderiza sección de workers activos"""
+            st.markdown("## 👷 Workers Activos")
             
-            if not rates_df.empty and 'hour' in rates_df.columns:
-                # Asegurar que 'hour' es datetime
-                rates_df['hour'] = pd.to_datetime(rates_df['hour'])
+            workers = self.get_active_workers()
+            
+            if workers:
+                # Crear DataFrame para mostrar tabla
+                workers_df = pd.DataFrame(workers)
                 
-                # Asegurarse de que tenemos worker_id también
-                if 'worker_id' in rates_df.columns:
-                    # Pivotear para tener workers como columnas
-                    pivot_df = rates_df.pivot_table(
-                        index='hour', 
-                        columns='worker_id', 
-                        values='count',
-                        aggfunc='sum',
-                        fill_value=0
-                    ).reset_index()
-                    
-                    # Crear gráfico de líneas
-                    fig = go.Figure()
-                    
-                    for col in pivot_df.columns:
-                        if col != 'hour':
-                            fig.add_trace(go.Scatter(
-                                x=pivot_df['hour'],
-                                y=pivot_df[col],
-                                mode='lines+markers',
-                                name=col
-                            ))
-                    
-                    fig.update_layout(
-                        title='Tasa de Procesamiento por Worker',
-                        xaxis_title='Hora',
-                        yaxis_title='Empresas procesadas',
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                # Verificar si existe la columna 'last_update'
+                if 'last_update' in workers_df.columns:
+                    workers_df['last_activity'] = workers_df['last_update'].apply(
+                        lambda x: f"hace {(datetime.now() - x).seconds} segundos" if isinstance(x, datetime) else "desconocido"
                     )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
                 else:
-                    st.info("No hay datos de workers para mostrar tasas de procesamiento")
+                    # Si no existe, crear una columna de actividad con valor por defecto
+                    workers_df['last_activity'] = "No disponible"
+                
+                # Determinar qué columnas mostrar basado en las disponibles
+                display_columns = []
+                if 'worker_id' in workers_df.columns:
+                    display_columns.append('worker_id')
+                    # Renombrar columna para mostrar nombre más legible
+                    workers_df.rename(columns={'worker_id': 'Worker ID'}, inplace=True)
+                if 'tasks' in workers_df.columns:
+                    display_columns.append('tasks')
+                    workers_df.rename(columns={'tasks': 'Tareas Procesadas'}, inplace=True)
+                display_columns.append('last_activity')
+                workers_df.rename(columns={'last_activity': 'Última Actividad'}, inplace=True)
+                
+                # Mostrar tabla solo si hay columnas para mostrar
+                if display_columns:
+                    # Usar versión simple de dataframe sin column_config
+                    st.dataframe(
+                        workers_df[[col.replace('worker_id', 'Worker ID')
+                                .replace('tasks', 'Tareas Procesadas')
+                                .replace('last_activity', 'Última Actividad') 
+                                for col in display_columns]],
+                        use_container_width=True
+                    )
+                else:
+                    st.warning("Los datos de workers no contienen las columnas esperadas")
             else:
-                st.info("No hay datos suficientes para mostrar tasas de procesamiento")
-    
-    def render_workers_section(self):
-        """Renderiza sección de workers activos"""
-        st.markdown("## 👷 Workers Activos")
-        
-        workers = self.get_active_workers()
-        
-        if workers:
-            # Crear DataFrame para mostrar tabla
-            workers_df = pd.DataFrame(workers)
-            
-            # Verificar si existe la columna 'last_update'
-            if 'last_update' in workers_df.columns:
-                workers_df['last_activity'] = workers_df['last_update'].apply(
-                    lambda x: f"hace {(datetime.now() - x).seconds} segundos" if isinstance(x, datetime) else "desconocido"
-                )
-            else:
-                # Si no existe, crear una columna de actividad con valor por defecto
-                workers_df['last_activity'] = "No disponible"
-            
-            # Determinar qué columnas mostrar basado en las disponibles
-            display_columns = []
-            if 'worker_id' in workers_df.columns:
-                display_columns.append('worker_id')
-                # Renombrar columna para mostrar nombre más legible
-                workers_df.rename(columns={'worker_id': 'Worker ID'}, inplace=True)
-            if 'tasks' in workers_df.columns:
-                display_columns.append('tasks')
-                workers_df.rename(columns={'tasks': 'Tareas Procesadas'}, inplace=True)
-            display_columns.append('last_activity')
-            workers_df.rename(columns={'last_activity': 'Última Actividad'}, inplace=True)
-            
-            # Mostrar tabla solo si hay columnas para mostrar
-            if display_columns:
-                # Usar versión simple de dataframe sin column_config
-                st.dataframe(
-                    workers_df[[col.replace('worker_id', 'Worker ID')
-                            .replace('tasks', 'Tareas Procesadas')
-                            .replace('last_activity', 'Última Actividad') 
-                            for col in display_columns]],
-                    use_container_width=True
-                )
-            else:
-                st.warning("Los datos de workers no contienen las columnas esperadas")
-        else:
-            st.warning("No hay workers activos en los últimos 5 minutos")
-    
+                st.warning("No hay workers activos en los últimos 5 minutos")
+
     def render_recent_results_section(self):
         """Renderiza sección de resultados recientes"""
         st.markdown("## 🔍 Resultados Recientes")
@@ -592,7 +549,7 @@ class ScrapingDashboard:
             if st.session_state.auto_refresh:
                 time.sleep(refresh_interval)  # Espera el intervalo definido
                 #st.experimental_set_query_params(refresh=str(time.time()))  # Fuerz
-            
+
             # Añadir opciones para cargar datos
             st.subheader("Administración")
             
@@ -626,40 +583,11 @@ class ScrapingDashboard:
         # Cuerpo principal
         self.render_metrics_section()
         self.render_charts_section()
-        
-        # Dividir en dos columnas
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            self.render_workers_section()
-        
-        with col2:
-            # Estadísticas adicionales
-            st.markdown("## 📊 Estadísticas de Éxito")
-            
-            success_rate = self.get_success_rate()
-            
-            fig = go.Figure()
-            fig.add_trace(go.Pie(
-                labels=['Éxitos', 'Fallidos'],
-                values=[success_rate['success'], success_rate['failed']],
-                marker=dict(colors=['rgb(40, 167, 69)', 'rgb(220, 53, 69)']),
-                hole=.4
-            ))
-            
-            fig.update_layout(
-                title=f"Tasa de Éxito: {success_rate['rate']:.1f}%",
-                legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5)
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-        
-        # Sección de resultados recientes
         self.render_recent_results_section()
         
         # Auto-refresh controlado por checkbox
         if st.session_state.auto_refresh:
-            time.sleep(0.1)  # Pequeña pausa para no bloquear la UI
+            #time.sleep(0.1)  # Pequeña pausa para no bloquear la UI
             st.empty()  # Elemento vacío para forzar rerun sin interferir con la UI
             
             # Solo hacer auto-refresh si ha pasado el intervalo configurado
