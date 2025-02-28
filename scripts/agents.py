@@ -7,7 +7,6 @@ from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 from config import GROQ_API_KEY, PROVINCIAS_ESPANA, HARDWARE_CONFIG
 import re
-from scraping import ProWebScraper
 import unicodedata
 from dataclasses import dataclass, field
 from enum import Enum

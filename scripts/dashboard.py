@@ -11,14 +11,6 @@ import json
 from task_manager import TaskManager
 from database_supabase import SupabaseDatabaseManager
 
-# Configurar la página
-st.set_page_config(
-    page_title="Scraping Dashboard",
-    page_icon="🕸️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
 # Estilos CSS
 st.markdown("""
 <style>
@@ -51,9 +43,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 class ScrapingDashboard:
-    def __init__(self):
+    def __init__(self, use_sidebar=True):
         self.task_manager = TaskManager()
         self.db = SupabaseDatabaseManager()
+        self.use_sidebar = use_sidebar
         
         # Inicializar estado
         if 'last_refresh' not in st.session_state:

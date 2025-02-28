@@ -19,7 +19,6 @@ import unicodedata
 import logging
 from agents import DBAgent
 from database import DatabaseManager
-from scraping import ProWebScraper
 from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA, SQL_MODELS, DB_CONFIG
 from agents import CustomLLM
 from scraping_flow import WebScrapingService
@@ -34,7 +33,6 @@ class EnterpriseApp:
     def __init__(self):
         self.init_session_state()
         self.db = DatabaseManager()
-        self.scraper = ProWebScraper()
         self.setup_agents()
         # Initialize the scraping dashboard
         self.scraping_dashboard = ScrapingDashboard(use_sidebar=False)
