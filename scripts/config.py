@@ -66,14 +66,6 @@ SQL_MODELS = {
     "qwen-2.5": "qwen-2.5-32b",
 }
 
-# Modelos para web scraping
-SCRAPING_MODELS = {
-    "qwen-2.5": "qwen-2.5-32b",
-    "gemma2": "gemma2-9b-it",
-    "llama-3.3": "llama-3.3-70b-versatile",
-    "deepseek-r1": "deepseek-r1-distill-llama-70b"
-}
-
 # Columnas requeridas para ingesta
 REQUIRED_COLUMNS = [
     "COD_INFOTEL",

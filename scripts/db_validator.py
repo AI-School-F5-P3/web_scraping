@@ -1,7 +1,5 @@
 # validators/data_validator.py
 
-# validators/data_validator.py
-
 import pandas as pd
 import re
 from urllib.parse import urlparse
