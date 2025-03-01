@@ -22,7 +22,7 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 class SupabaseDatabaseManager:
     def __init__(self):
         self.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        
+        self.db_params = {"url": SUPABASE_URL, "key": SUPABASE_KEY}
         self.data_processor = DataProcessor()
         print("Conexión a Supabase establecida correctamente")
         
@@ -36,47 +36,72 @@ class SupabaseDatabaseManager:
         pero usa la API de Supabase en lugar de conexión directa PostgreSQL
         """
         try:
-            # Para consultas SELECT, usamos la API de Supabase
+            print(f"Ejecutando consulta: {query}")
+            
+            # Para consultas SELECT
             if query.strip().upper().startswith("SELECT"):
-                # Extraer nombre de tabla (simplificado)
-                table_name = self._extract_table_name(query)
-                
-                # Construir consulta con Supabase API
-                response = self.supabase.table(table_name).select('*')
-                
-                # Aplicar límite si es parte de la consulta
-                if "LIMIT" in query.upper() and params and len(params) > 0:
-                    limit_value = params[0] if isinstance(params, tuple) else params
-                    response = response.limit(limit_value)
-                
-                # Aplicar filtros si es necesario (simplificado)
-                if "WHERE" in query.upper():
-                    # Por ejemplo, para la consulta de URLs
-                    if "url IS NOT NULL" in query and "url != ''" in query:
-                        response = response.not_is('url', 'null').neq('url', '')
-                
-                # Ejecutar consulta
-                result = response.execute()
-                
-                # Convertir a DataFrame si se solicita
-                if return_df and result.data:
-                    df = pd.DataFrame(result.data)
-                    # Eliminar duplicados si están presentes
-                    if 'cod_infotel' in df.columns:
-                        df = df.drop_duplicates(subset=['cod_infotel'])
-                    return df
-                elif "COUNT" in query.upper() and result.data is not None:
-                    return len(result.data)
+                # Si es una consulta COUNT, usar función count de Supabase
+                if "COUNT(*)" in query.upper():
+                    # Extraer nombre de tabla
+                    table_name = self._extract_table_name(query)
+                    print(f"Consultando tabla: {table_name}")
+                    
+                    # Construir consulta con Supabase API
+                    response = self.supabase.table(table_name).select('*', count='exact').execute()
+                    
+                    # Procesar resultado específicamente para COUNT
+                    count = response.count if hasattr(response, 'count') else 0
+                    
+                    if return_df:
+                        # Crear un DataFrame con las columnas esperadas en la consulta original
+                        # Esto soluciona el problema del KeyError: 'total'
+                        result_dict = {
+                            'total': count,
+                            'processed': 0,  # Valores predeterminados
+                            'unprocessed': 0,
+                            'with_url': 0,
+                            'no_url_processed': 0
+                        }
+                        
+                        # Intentar llenar con datos más precisos si es posible
+                        if response.data:
+                            # Contar registros procesados
+                            processed = sum(1 for item in response.data if item.get('processed', False))
+                            result_dict['processed'] = processed
+                            result_dict['unprocessed'] = count - processed
+                            
+                            # Contar registros con URL
+                            with_url = sum(1 for item in response.data if item.get('url_exists', False))
+                            result_dict['with_url'] = with_url
+                            
+                            # Contar registros sin URL pero procesados
+                            no_url_processed = sum(1 for item in response.data 
+                                                if item.get('processed', False) and not item.get('url_exists', False))
+                            result_dict['no_url_processed'] = no_url_processed
+                        
+                        df = pd.DataFrame([result_dict])
+                        print(f"DataFrame creado con columnas: {df.columns.tolist()}")
+                        return df
+                    else:
+                        return count
                 else:
-                    return result.data
+                    # Para otras consultas SELECT normales
+                    table_name = self._extract_table_name(query)
+                    response = self.supabase.table(table_name).select('*').execute()
+                    
+                    if return_df and response.data:
+                        df = pd.DataFrame(response.data)
+                        return df
+                    else:
+                        return response.data
             else:
                 # Para otras consultas, por ahora retornamos None
-                # En una implementación completa, habría que usar RPC o SQL directo vía REST
                 print(f"Advertencia: Consulta no compatible con API de Supabase: {query}")
                 return None
                 
         except Exception as e:
             print(f"Database error: {str(e)}")
+            traceback.print_exc()
             return None
     
     def _extract_table_name(self, query: str) -> str:

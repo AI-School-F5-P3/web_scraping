@@ -5,6 +5,7 @@ import socket
 import json
 from typing import Dict, Any, List, Optional, Tuple
 import traceback
+import uuid
 
 # Importaciones del sistema original
 from scraping_flow import WebScrapingService, RateLimiter
@@ -18,28 +19,48 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class DistributedWebScrapingService:
-    """
-    Servicio de scraping distribuido usando Redis para coordinación
-    y Supabase para almacenamiento centralizado
-    """
     def __init__(self, worker_id=None):
-        # Generar ID de worker automáticamente si no se proporciona
-        if worker_id is None:
-            self.worker_id = f"{socket.gethostname()}_{os.getpid()}"
-        else:
-            self.worker_id = worker_id
+        """
+        Inicializa el servicio distribuido de web scraping
+        
+        Args:
+            worker_id: Identificador único del worker
+        """
+        self.worker_id = worker_id or f"worker-{uuid.uuid4().hex[:8]}"
+        print(f"Iniciando worker {self.worker_id}")
+        
+        # Inicializar TaskManager sin pasar el worker_id
+        # ya que la clase TaskManager no acepta este parámetro
+        self.task_manager = TaskManager()
+        
+        # Para usar en actualizaciones, conservamos el worker_id
+        self.updater_id = self.worker_id
+        
+        # Inicializar cliente de base de datos
+        try:
+            self.db = SupabaseDatabaseManager()
+        except Exception as e:
+            print(f"Error inicializando conexión a base de datos: {str(e)}")
+            traceback.print_exc()
+            self.db = None
             
-        # Inicializar gestor de tareas (Redis)
-        
-        self.task_manager = TaskManager(worker_id=self.worker_id)
-        # Inicializar conexión a base de datos (Supabase)
-        self.db = SupabaseDatabaseManager()
-        
-        # Inicializar servicio de scraping original
-        # Usamos SUPABASE_DB_CONFIG en lugar de DB_CONFIG
-        self.scraper = WebScrapingService(SUPABASE_DB_CONFIG)
-        
-        logger.info(f"DistributedWebScrapingService inicializado con worker ID: {self.worker_id}")
+        # Inicializar servicio de scraping (pasando el objeto SupabaseDatabaseManager)
+        try:
+            # Nota: Aquí usamos el objeto db directamente en lugar de db_params
+            self.scraper = WebScrapingService(self.db)
+        except Exception as e:
+            print(f"Error inicializando servicio de scraping: {str(e)}")
+            traceback.print_exc()
+            self.scraper = None
+            
+        # Estadísticas del worker
+        self.stats = {
+            "tasks_processed": 0,
+            "successful_tasks": 0,
+            "failed_tasks": 0,
+            "start_time": time.time(),
+            "last_task_time": None
+        }
 
     def process_next_task(self) -> Dict[str, Any]:
         """
@@ -72,12 +93,19 @@ class DistributedWebScrapingService:
                 
                 # Actualizar en Supabase
                 update_result = self.db.update_scraping_results([result], worker_id=self.worker_id)
-                
+                # Actualizar en Supabase
+                update_result = self.db.update_scraping_results([result], worker_id=self.worker_id)
+
+                # Verificar el resultado de la actualización
+                if update_result.get("status") == "success":
+                    print(f"Actualización exitosa: {update_result.get('updated')} registros")
+                else:
+                    print(f"Error en la actualización: {update_result.get('message', 'Sin mensaje de error')}")
                 # Marcar tarea como completada en Redis
+                result["success"] = True  # Incluir el valor de success dentro de result
                 self.task_manager.complete_task(
-                    task, 
-                    success=True, 
-                    result=result
+                task_id=task["task_id"],
+                result=result
                 )
                 
                 return {

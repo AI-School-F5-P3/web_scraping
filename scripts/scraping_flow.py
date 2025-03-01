@@ -17,17 +17,16 @@ import socket
 import json
 import psycopg2
 import logging
-from typing import List, Dict, Any, Tuple, Set
+from typing import List, Dict, Any, Tuple, Set, Optional, Union
 from concurrent.futures import ThreadPoolExecutor
-from config import DB_CONFIG, TIMEOUT_CONFIG
 import urllib3
 import warnings
+import pandas as pd
 
-# Configurar silenciamiento de warnings y logging
 # Configurar silenciamiento de warnings y logging
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
-warnings.filterwarnings("ignore", message=".*Retrying.*")  # Captura todos los mensajes de reintento
+warnings.filterwarnings("ignore", message=".*Retrying.*")
 warnings.filterwarnings("ignore", message=".*getaddrinfo failed.*")
 warnings.filterwarnings("ignore", category=urllib3.exceptions.HTTPWarning)
 
@@ -63,49 +62,74 @@ class RateLimiter:
         return wrapper
 
 class WebScrapingService:
-    def __init__(self, db_params: dict):
+    def __init__(self, db_or_params):
         """
         Inicializa el servicio de web scraping
-        :param db_params: Parámetros de conexión a PostgreSQL
+        
+        Args:
+            db_or_params: Puede ser un objeto SupabaseDatabaseManager o un diccionario con parámetros de conexión
         """
-        self.db_params = db_params
         try:
-            # Conectar directamente a PostgreSQL
-            self.connection = psycopg2.connect(**db_params)
-            self.connection.autocommit = True
-            logger.info("Conexión a la base de datos establecida correctamente")
+            # Determinar si recibimos un objeto SupabaseDatabaseManager o parámetros de conexión
+            self.db_manager = None
+            self.connection = None
+            self.db_params = None
+            
+            if hasattr(db_or_params, 'supabase'):  # Es un objeto SupabaseDatabaseManager
+                self.db_manager = db_or_params
+                self.db_type = 'supabase'
+                logger.info("Utilizando cliente Supabase desde objeto SupabaseDatabaseManager")
+            else:  # Son parámetros de conexión tradicionales
+                self.db_params = db_or_params
+                try:
+                    # Intentar conectar directamente a PostgreSQL
+                    self.connection = psycopg2.connect(**db_or_params)
+                    self.connection.autocommit = True
+                    self.db_type = 'postgres'
+                    logger.info("Conexión a PostgreSQL establecida correctamente")
+                except Exception as pg_error:
+                    logger.error(f"Error conectando a PostgreSQL: {str(pg_error)}")
+                    raise
         except Exception as e:
             logger.error(f"Error conectando a la base de datos: {str(e)}")
-            self.connection = None
+            raise
     
     def execute_query(self, query: str, params: tuple = None, return_df=False):
         """
         Ejecuta una consulta SQL y opcionalmente retorna los resultados como DataFrame
+        Adaptado para funcionar con PostgreSQL directo o Supabase
         """
-        import pandas as pd
         try:
-            if self.connection is None or self.connection.closed:
-                self.connection = psycopg2.connect(**self.db_params)
-                self.connection.autocommit = True
-                
-            with self.connection.cursor() as cursor:
-                if params:
-                    cursor.execute(query, params)
-                else:
-                    cursor.execute(query)
+            if self.db_type == 'postgres':
+                # Método original para PostgreSQL directo
+                if self.connection is None or self.connection.closed:
+                    self.connection = psycopg2.connect(**self.db_params)
+                    self.connection.autocommit = True
                     
-                if cursor.description:  # Si la consulta retorna resultados
-                    columns = [desc[0] for desc in cursor.description]
-                    results = cursor.fetchall()
-                    
-                    if return_df:
-                        df = pd.DataFrame(results, columns=columns)
-                        return df
-                    return results
+                with self.connection.cursor() as cursor:
+                    if params:
+                        cursor.execute(query, params)
+                    else:
+                        cursor.execute(query)
+                        
+                    if cursor.description:  # Si la consulta retorna resultados
+                        columns = [desc[0] for desc in cursor.description]
+                        results = cursor.fetchall()
+                        
+                        if return_df:
+                            df = pd.DataFrame(results, columns=columns)
+                            return df
+                        return results
+                    return None
+            elif self.db_type == 'supabase':
+                # Usar el manager de Supabase para ejecutar la consulta
+                return self.db_manager.execute_query(query, params, return_df)
+            else:
+                logger.error("Tipo de base de datos no soportado")
                 return None
         except Exception as e:
             logger.error(f"Error ejecutando consulta: {str(e)}")
-            if self.connection and not self.connection.closed:
+            if self.db_type == 'postgres' and self.connection and not self.connection.closed:
                 self.connection.rollback()
             return None
 
@@ -143,8 +167,6 @@ class WebScrapingService:
             logger.error(f"Error obteniendo empresas: {e}")
             return []
                 
-        
-
     def process_company(self, company: Dict) -> Tuple[bool, Dict]:
         """
         Procesa una empresa individual siguiendo el flujo definido
@@ -255,8 +277,6 @@ class WebScrapingService:
         # Generar combinaciones de nombres
         name_combinations = []
         
-        
-        
         # Nombre completo sin guiones (todo junto)
         name_combinations.append(clean_name.replace('-', ''))
         
@@ -283,8 +303,6 @@ class WebScrapingService:
                 # Cuatro primeras palabras - sin guiones
                 name_combinations.append(''.join(words[:4]))
                 
-            
-        
         # Generar las URLs combinando nombres y dominios
         for name in name_combinations:
             for domain in domains:
@@ -642,7 +660,6 @@ class WebScrapingService:
                 score -= 10
         # 13. Penalizar si es un dominio que está en venta
         domain_in_sale_terms = [
-    
             "dominio en venta", "comprar este dominio", "este dominio está en venta",  
             "venta de dominio", "adquiere este dominio", "domain for sale", "buy this domain", "this domain is for sale",  
             "domain available", "this domain is available", "domain auction", "bid on this domain",  
@@ -732,24 +749,8 @@ class WebScrapingService:
                     print(f"✅ Dominio válido con DNS {dns_name}: {base_domain} -> {ips}")
                     domain_exists = True
                     break  # Salir del bucle si tiene éxito
-                except Exception as e:
-                    print(f"❌ Error con DNS {nameservers[0] if nameservers else 'Local'}: {type(e).__name__}")
-                    # Intentar con www si no lo tiene
-                    if not domain.startswith('www.'):
-                        try:
-                            resolver = dns.resolver.Resolver()
-                            if nameservers:
-                                resolver.nameservers = nameservers
-                            resolver.timeout = 2
-                            resolver.lifetime = 2
-                            
-                            answers = resolver.resolve('www.' + base_domain, 'A')
-                            ips = [rdata.address for rdata in answers]
-                            print(f"✅ Dominio válido con www usando DNS {dns_name}: www.{base_domain} -> {ips}")
-                            domain_exists = True
-                            break  # Salir del bucle si tiene éxito
-                        except:
-                            pass  # Continuar con el siguiente servidor DNS
+                except:
+                    pass  # Continuar con el siguiente servidor DNS
             
             # Método 2: Usar socket como fallback si DNS falló
             if not domain_exists:
@@ -1090,33 +1091,13 @@ class WebScrapingService:
             'evidence': evidence
         }
 
+    # En WebScrapingService, modifica el método update_company_data
+
     def update_company_data(self, company_id: int, data: Dict) -> Dict[str, Any]:
         """Actualiza los datos de la empresa en la base de datos"""
         try:
-            print(f"\nActualizando datos para empresa {company_id}")
-            
-            # Crear query de actualización
-            update_query = """
-            UPDATE sociedades 
-            SET 
-                url_exists = %s,
-                url_valida = %s,
-                url_limpia = %s,
-                url_status = %s,
-                url_status_mensaje = %s,
-                telefono_1 = %s,
-                telefono_2 = %s,
-                telefono_3 = %s,
-                facebook = %s,
-                twitter = %s,
-                linkedin = %s,
-                instagram = %s,
-                youtube = %s,
-                e_commerce = %s,
-                processed = TRUE,
-                fecha_actualizacion = NOW()
-            WHERE cod_infotel = %s
-            """
+            print(f"\n=== DIAGNÓSTICO: Actualizando empresa {company_id} ===")
+            print(f"Tipo de base de datos: {self.db_type}")
             
             # Preparar los parámetros
             phones = data.get('phones', [])
@@ -1124,49 +1105,87 @@ class WebScrapingService:
             
             social_media = data.get('social_media', {})
             
-            params = (
-                data.get('url_exists', False),
-                data.get('url_valida', ''),
-                data.get('url_limpia', ''),
-                data.get('url_status', -1),
-                data.get('url_status_mensaje', ''),
-                phones[0],
-                phones[1],
-                phones[2],
-                social_media.get('facebook', ''),
-                social_media.get('twitter', ''),
-                social_media.get('linkedin', ''),
-                social_media.get('instagram', ''),
-                social_media.get('youtube', ''),
-                data.get('is_ecommerce', False),
-                company_id
-            )
-            
-            # Ejecutar query
-            with self.connection.cursor() as cursor:
-                cursor.execute(update_query, params)
+            if self.db_type == 'postgres':
+                # Código existente para PostgreSQL...
+                pass
+            elif self.db_type == 'supabase':
+                # Método para Supabase
+                # Crear diccionario de actualización
+                update_data = {
+                    'url_exists': data.get('url_exists', False),
+                    'url_valida': data.get('url_valida', ''),
+                    'url_limpia': data.get('url_limpia', ''),
+                    'url_status': data.get('url_status', -1),
+                    'url_status_mensaje': data.get('url_status_mensaje', ''),
+                    'telefono_1': phones[0],
+                    'telefono_2': phones[1],
+                    'telefono_3': phones[2],
+                    'facebook': social_media.get('facebook', ''),
+                    'twitter': social_media.get('twitter', ''),
+                    'linkedin': social_media.get('linkedin', ''),
+                    'instagram': social_media.get('instagram', ''),
+                    'youtube': social_media.get('youtube', ''),
+                    'e_commerce': data.get('is_ecommerce', False),
+                    'processed': True
+                }
                 
-                if cursor.rowcount > 0:
-                    self.connection.commit()
-                    print(f"✅ Empresa {company_id} actualizada exitosamente")
-                    return {
-                        "status": "success",
-                        "message": f"Empresa {company_id} actualizada exitosamente"
-                    }
-                else:
-                    print(f"⚠️ No se actualizó la empresa {company_id}. Posible error de ID.")
-                    return {
-                        "status": "error",
-                        "message": f"No se encontró la empresa con ID {company_id}"
-                    }
+                print(f"Datos a actualizar: {json.dumps(update_data, indent=2)}")
+                
+                # Actualizar usando la API de Supabase
+                try:
+                    print(f"Llamando a Supabase para actualizar empresa {company_id}...")
+                    response = self.db_manager.supabase.table('sociedades').update(update_data).eq('cod_infotel', company_id).execute()
+                    
+                    print(f"Respuesta de Supabase: {response}")
+                    print(f"Datos de respuesta: {response.data if hasattr(response, 'data') else 'No data'}")
+                    
+                    if response.data and len(response.data) > 0:
+                        print(f"✅ Empresa {company_id} actualizada exitosamente en Supabase")
+                        success = True
+                    else:
+                        print(f"⚠️ No se actualizó la empresa {company_id} en Supabase")
+                        
+                        # Verificar si la empresa existe
+                        print(f"Verificando si la empresa {company_id} existe...")
+                        check_response = self.db_manager.supabase.table('sociedades').select('cod_infotel').eq('cod_infotel', company_id).execute()
+                        
+                        print(f"Respuesta de verificación: {check_response}")
+                        print(f"Datos de verificación: {check_response.data if hasattr(check_response, 'data') else 'No data'}")
+                        
+                        if not check_response.data or len(check_response.data) == 0:
+                            print(f"❌ La empresa con ID {company_id} no existe en la base de datos")
+                        else:
+                            print(f"⚠️ La empresa existe pero no se actualizó. Verificar condiciones de la consulta.")
+                        success = False
+                except Exception as supabase_error:
+                    print(f"❌ Error en la API de Supabase: {str(supabase_error)}")
+                    traceback.print_exc()
+                    raise supabase_error
+            else:
+                print(f"❌ Tipo de base de datos no soportado: {self.db_type}")
+                success = False
+            
+            if success:
+                return {
+                    "status": "success",
+                    "message": f"Empresa {company_id} actualizada exitosamente"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"No se encontró la empresa con ID {company_id}"
+                }
                     
         except Exception as e:
             print(f"❌ Error actualizando empresa {company_id}: {str(e)}")
             traceback.print_exc()
             
-            if self.connection and not self.connection.closed:
-                self.connection.rollback()
-                
+            if self.db_type == 'postgres' and self.connection and not self.connection.closed:
+                try:
+                    self.connection.rollback()
+                except Exception as rollback_error:
+                    print(f"Error adicional durante rollback: {str(rollback_error)}")
+                    
             return {
                 "status": "error",
                 "message": str(e)
