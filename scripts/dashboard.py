@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 import json
 from task_manager import TaskManager
 from database_supabase import SupabaseDatabaseManager
+from redis_config import REDIS_QUEUE_PROCESSING, REDIS_QUEUE_PENDING, REDIS_QUEUE_COMPLETED, REDIS_QUEUE_FAILED
+from task import Task
 
 # Estilos CSS
 st.markdown("""
@@ -87,7 +89,12 @@ class ScrapingDashboard:
     
     def get_queue_stats(self):
         """Obtiene estadísticas de las colas"""
-        return self.task_manager.get_queue_stats()
+        try:
+            return self.task_manager.get_queue_stats()
+        except Exception as e:
+            # Devolver valores predeterminados en caso de error
+            print(f"Error getting queue stats: {str(e)}")
+            return {"pending": 0, "processing": 0, "completed": 0, "failed": 0}
     
     def get_progress_data(self):
         """Obtiene datos de progreso"""
@@ -114,26 +121,80 @@ class ScrapingDashboard:
         }
     
     def get_active_workers(self):
-        """Obtiene la lista de workers activos en los últimos 5 minutos"""
-        query = """
-        SELECT worker_id, COUNT(*) as tasks, MAX(fecha_actualizacion) as last_update
-        FROM sociedades
-        WHERE worker_id IS NOT NULL
-            AND fecha_actualizacion > NOW() - INTERVAL '5 minutes'
-        GROUP BY worker_id
-        ORDER BY last_update DESC
-        """
-        
-        workers_df = self.db.execute_query(query, return_df=True)
-
-        if not isinstance(workers_df, pd.DataFrame):
-            workers_df = pd.DataFrame(columns=['worker_id'])  # Define columnas según la consulta
-
-            if workers_df.empty:
+        """Obtiene la lista de workers activos desde Redis"""
+        try:
+            # En Redis, los workers activos tendrían un heartbeat
+            # Buscar todos los heartbeats activos
+            active_workers = {}
+            
+            # Patrón para buscar todos los heartbeats de tareas
+            heartbeat_keys = self.task_manager.redis.keys("task:*:heartbeat")
+            
+            if not heartbeat_keys:
                 return []
             
+            # Para cada heartbeat, obtener la tarea correspondiente
+            for key in heartbeat_keys:
+                # Extraer el task_id del patrón "task:{task_id}:heartbeat"
+                task_id = key.split(':')[1]
+                
+                # Buscar esta tarea en la cola de procesamiento
+                processing_queue = self.task_manager.redis.lrange(REDIS_QUEUE_PROCESSING, 0, -1)
+                
+                for task_json in processing_queue:
+                    task = Task.from_json(task_json)
+                    
+                    if task.task_id == task_id:
+                        worker_id = task.worker_id
+                        
+                        if worker_id not in active_workers:
+                            active_workers[worker_id] = {
+                                'worker_id': worker_id,
+                                'tasks': 0,
+                                'last_update': time.time(),
+                                'last_company': task.company_data.get('razon_social', 'Desconocida')
+                            }
+                        
+                        active_workers[worker_id]['tasks'] += 1
+                        
+                        # Actualizar si esta tarea es más reciente
+                        if task.started_at > active_workers[worker_id]['last_update']:
+                            active_workers[worker_id]['last_update'] = task.started_at
+                            active_workers[worker_id]['last_company'] = task.company_data.get('razon_social', 'Desconocida')
             
-        return workers_df.to_dict('records')
+            # Convertir el diccionario a una lista de registros
+            workers_list = list(active_workers.values())
+            
+            # Si la lista está vacía, intentar un enfoque alternativo:
+            # Revisar todas las tareas en procesamiento para extraer workers
+            if not workers_list:
+                processing_tasks = self.task_manager.redis.lrange(REDIS_QUEUE_PROCESSING, 0, -1)
+                processing_workers = {}
+                
+                for task_json in processing_tasks:
+                    task = Task.from_json(task_json)
+                    
+                    if task.worker_id:
+                        if task.worker_id not in processing_workers:
+                            processing_workers[task.worker_id] = {
+                                'worker_id': task.worker_id,
+                                'tasks': 0,
+                                'last_update': task.started_at or time.time(),
+                                'last_company': task.company_data.get('razon_social', 'Desconocida')
+                            }
+                        
+                        processing_workers[task.worker_id]['tasks'] += 1
+                
+                workers_list = list(processing_workers.values())
+            
+            # También podemos obtener información de métricas adicionales
+            # Como los tiempos de procesamiento promedio por worker
+            
+            return workers_list
+        
+        except Exception as e:
+            print(f"Error al obtener workers activos desde Redis: {str(e)}")
+            return []
     
     def get_processing_rates(self):
         """Obtiene tasas de procesamiento por worker"""
@@ -208,15 +269,20 @@ class ScrapingDashboard:
         
         return df
 
-    def reload_pending_tasks(self):
-        """Recarga las tareas pendientes desde la base de datos"""
+    def reload_pending_tasks(self, batch_size=None):
+        """Recarga todas las tareas pendientes desde la base de datos sin límite predeterminado"""
         try:
-            # Consulta para obtener todas las empresas no procesadas
+            # Consulta base para obtener empresas no procesadas
             query = """
-            SELECT cod_infotel, razon_social, url
-            FROM sociedades
+            SELECT cod_infotel, razon_social, url 
+            FROM sociedades 
             WHERE processed = FALSE
-            """            
+            """
+            
+            # Añadir LIMIT solo si se especifica batch_size
+            if batch_size:
+                query += f" LIMIT {batch_size}"
+                
             # Obtener los datos
             pending_tasks = self.db.execute_query(query, return_df=True)
                 
@@ -224,41 +290,52 @@ class ScrapingDashboard:
                 st.session_state.task_reload_message = "No hay tareas pendientes para recargar"
                 self.increment_refresh_counter()
                 return 0
-                
-            # Preparar lista de tareas para encolar
-            tasks_list = []
-            for index, row in pending_tasks.iterrows():
-                # Manejar valores nulos en la URL
-                url_value = "" if pd.isna(row["url"]) else row["url"]
-                
-                task_data = {
-                    "cod_infotel": int(row["cod_infotel"]),  # Asegurar que es entero
-                    "razon_social": str(row["razon_social"]),  # Asegurar que es string
-                    "url": str(url_value)  # Asegurar que es string
-                }
-                tasks_list.append(task_data)
             
-            # Encolar todas las tareas de una vez
-            if tasks_list:
-                self.task_manager.enqueue_tasks(tasks_list)  # Pasar lista completa
-                count = len(tasks_list)
-                
-                # Agregar mensaje de éxito
-                st.session_state.task_reload_message = f"Tareas pendientes recargadas correctamente ({count})"
-                self.increment_refresh_counter()
-                return count
-            else:
-                st.session_state.task_reload_message = "No se pudieron preparar tareas para recargar"
-                self.increment_refresh_counter()
-                return 0
+            # Convertir DataFrame a lista de diccionarios
+            companies_list = pending_tasks.to_dict('records')
+            total_found = len(companies_list)
             
+            # Get current pending tasks to avoid duplicates
+            pending_tasks_json = self.task_manager.redis.lrange(REDIS_QUEUE_PENDING, 0, -1)
+            current_company_ids = []
+            for task_json in pending_tasks_json:
+                try:
+                    task_data = json.loads(task_json)
+                    if 'company_id' in task_data:
+                        current_company_ids.append(task_data['company_id'])
+                except:
+                    pass
+            
+            # Filter out companies already in queue
+            new_companies = [
+                company for company in companies_list 
+                if company['cod_infotel'] not in current_company_ids
+            ]
+            
+            # Procesar en lotes si hay muchas empresas para evitar sobrecarga
+            total_enqueued = 0
+            processing_batch_size = 5000  # Tamaño de lote para procesamiento interno
+            
+            for i in range(0, len(new_companies), processing_batch_size):
+                process_batch = new_companies[i:i+processing_batch_size]
+                enqueued = self.task_manager.enqueue_tasks(process_batch)
+                total_enqueued += enqueued
+                # Pequeña pausa para evitar sobrecargar Redis
+                time.sleep(0.1)
+            
+            # Mensaje de éxito
+            message = f"Tareas recargadas: {total_enqueued} nuevas de {total_found} encontradas"
+            st.session_state.task_reload_message = message
+            
+            self.increment_refresh_counter()
+            return total_enqueued
+                
         except Exception as e:
             st.session_state.task_reload_message = f"Error al recargar tareas: {str(e)}"
-            print(f"Error detallado: {str(e)}")
             import traceback
             traceback.print_exc()
             self.increment_refresh_counter()
-            return -1 
+            return -1
         
     def render_metrics_section(self):
         """Renderiza sección de métricas principales"""
@@ -322,6 +399,68 @@ class ScrapingDashboard:
                 """, 
                 unsafe_allow_html=True
             )
+    def render_workers_section(self):
+        """Renderiza sección de workers activos con datos de Redis"""
+        st.markdown("## 👷 Workers Activos")
+        
+        workers = self.get_active_workers()
+        
+        if workers:
+            # Crear DataFrame
+            workers_df = pd.DataFrame(workers)
+            
+            # Formatear columna de tiempo
+            if 'last_update' in workers_df.columns:
+                # Calcular hace cuánto tiempo fue la última actividad
+                now = time.time()
+                
+                def format_time_ago(timestamp):
+                    if not timestamp:
+                        return "No disponible"
+                    
+                    try:
+                        seconds = now - float(timestamp)
+                        
+                        if seconds < 60:
+                            return f"hace {int(seconds)} segundos"
+                        elif seconds < 3600:
+                            return f"hace {int(seconds // 60)} minutos"
+                        else:
+                            hours = int(seconds // 3600)
+                            minutes = int((seconds % 3600) // 60)
+                            return f"hace {hours} horas y {minutes} minutos"
+                    except Exception as e:
+                        print(f"Error al formatear tiempo: {e}")
+                        return "Error de formato"
+                
+                workers_df['ultima_actividad'] = workers_df['last_update'].apply(format_time_ago)
+            else:
+                workers_df['ultima_actividad'] = "No disponible"
+            
+            # Renombrar columnas para mostrar
+            columns_mapping = {
+                'worker_id': 'Worker ID',
+                'tasks': 'Tareas Actuales',
+                'last_company': 'Empresa Actual',
+                'ultima_actividad': 'Última Actividad'
+            }
+            
+            # Seleccionar las columnas que existen
+            display_columns = [col for col in columns_mapping.keys() if col in workers_df.columns]
+            
+            # Renombrar columnas
+            for old_col, new_col in columns_mapping.items():
+                if old_col in workers_df.columns:
+                    workers_df.rename(columns={old_col: new_col}, inplace=True)
+            
+            # Mostrar DataFrame 
+            if display_columns:
+                display_cols = [columns_mapping[col] for col in display_columns if col in columns_mapping]
+                st.dataframe(workers_df[display_cols], use_container_width=True)
+            else:
+                st.warning("Los datos de workers no contienen las columnas esperadas")
+        else:
+            st.warning("No hay workers activos en este momento")
     
     def render_charts_section(self):
         """Renderiza sección de gráficos"""
@@ -384,50 +523,8 @@ class ScrapingDashboard:
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            """Renderiza sección de workers activos"""
-            st.markdown("## 👷 Workers Activos")
-            
-            workers = self.get_active_workers()
-            
-            if workers:
-                # Crear DataFrame para mostrar tabla
-                workers_df = pd.DataFrame(workers)
-                
-                # Verificar si existe la columna 'last_update'
-                if 'last_update' in workers_df.columns:
-                    workers_df['last_activity'] = workers_df['last_update'].apply(
-                        lambda x: f"hace {(datetime.now() - x).seconds} segundos" if isinstance(x, datetime) else "desconocido"
-                    )
-                else:
-                    # Si no existe, crear una columna de actividad con valor por defecto
-                    workers_df['last_activity'] = "No disponible"
-                
-                # Determinar qué columnas mostrar basado en las disponibles
-                display_columns = []
-                if 'worker_id' in workers_df.columns:
-                    display_columns.append('worker_id')
-                    # Renombrar columna para mostrar nombre más legible
-                    workers_df.rename(columns={'worker_id': 'Worker ID'}, inplace=True)
-                if 'tasks' in workers_df.columns:
-                    display_columns.append('tasks')
-                    workers_df.rename(columns={'tasks': 'Tareas Procesadas'}, inplace=True)
-                display_columns.append('last_activity')
-                workers_df.rename(columns={'last_activity': 'Última Actividad'}, inplace=True)
-                
-                # Mostrar tabla solo si hay columnas para mostrar
-                if display_columns:
-                    # Usar versión simple de dataframe sin column_config
-                    st.dataframe(
-                        workers_df[[col.replace('worker_id', 'Worker ID')
-                                .replace('tasks', 'Tareas Procesadas')
-                                .replace('last_activity', 'Última Actividad') 
-                                for col in display_columns]],
-                        use_container_width=True
-                    )
-                else:
-                    st.warning("Los datos de workers no contienen las columnas esperadas")
-            else:
-                st.warning("No hay workers activos en los últimos 5 minutos")
+            # Ahora llamamos a la función separada para renderizar los workers
+            self.render_workers_section()
 
     def render_recent_results_section(self):
         """Renderiza sección de resultados recientes"""
