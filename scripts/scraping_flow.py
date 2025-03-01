@@ -242,7 +242,7 @@ class WebScrapingService:
         words = clean_name.split('-')
         
         # Determinar dominios basados en provincia
-        domains = ['.es', '.com', '.net', '.org']
+        domains = ['.es', '.com']
         if provincia:
             provincia_norm = unicodedata.normalize('NFKD', str(provincia)).encode('ASCII', 'ignore').decode()
             if provincia_norm.upper() in ['BARCELONA', 'TARRAGONA', 'LERIDA', 'GIRONA', 'GERONA', 'LLEIDA']:
