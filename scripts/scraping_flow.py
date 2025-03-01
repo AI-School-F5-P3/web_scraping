@@ -1188,11 +1188,12 @@ class WebScrapingService:
             try:
                 print(f"\nProcesando empresa: {company['razon_social']} (ID: {company['cod_infotel']})")
                 
-                # 1. Verificar la URL original
+                # Verificar la URL original
                 success, data = self.process_company(company)
                 
+                # IMPORTANTE: Siempre marcar como procesado, independientemente del resultado
                 if success:
-                    # Actualizar en base de datos
+                    # Caso exitoso - se encontró una URL válida
                     update_result = self.update_company_data(company['cod_infotel'], data)
                     
                     if update_result.get('status') == 'success':
@@ -1215,12 +1216,14 @@ class WebScrapingService:
                             'error': update_result.get('message', 'Error al actualizar en BD')
                         }
                 else:
-                    # Marcar como procesado pero sin éxito
+                    # Caso fallido - no se encontró URL válida
+                    # PERO aún así marcamos como procesado con processed = TRUE
                     empty_data = {
                         'cod_infotel': company['cod_infotel'],
                         'url_exists': False,
                         'url_status': -1,
-                        'url_status_mensaje': data.get('url_status_mensaje', 'URL no válida')
+                        'url_status_mensaje': data.get('url_status_mensaje', 'URL no válida'),
+                        'processed': True  # Asegurarse de que este campo esté presente y sea TRUE
                     }
                     self.update_company_data(company['cod_infotel'], empty_data)
                     
@@ -1237,6 +1240,19 @@ class WebScrapingService:
             except Exception as e:
                 print(f"❌ Error procesando empresa {company['cod_infotel']}: {str(e)}")
                 traceback.print_exc()
+                
+                # También marcar como procesada en caso de error
+                empty_data = {
+                    'cod_infotel': company['cod_infotel'],
+                    'url_exists': False,
+                    'url_status': -1,
+                    'url_status_mensaje': str(e),
+                    'processed': True  # Asegurarse de que este campo esté presente y sea TRUE
+                }
+                try:
+                    self.update_company_data(company['cod_infotel'], empty_data)
+                except Exception as update_error:
+                    print(f"Error secundario al actualizar estado: {str(update_error)}")
                 
                 results['failed'] += 1
                 results['details'].append({
