@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 import unicodedata
 import logging
-from agents import DBAgent
+from agents import UnifiedAgent
 from database import DatabaseManager
 from config import REQUIRED_COLUMNS, PROVINCIAS_ESPANA, SQL_MODELS, DB_CONFIG
 from agents import CustomLLM
@@ -36,11 +36,8 @@ class EnterpriseApp:
         self.setup_agents()
         # Initialize the scraping dashboard
         self.scraping_dashboard = ScrapingDashboard(use_sidebar=False)
-        # Initialize the RAG system
-        self.setup_rag_system()
         # Load data from DB if session_state is empty
         self.load_data_from_db()    
-        
         # Add custom CSS
         self.apply_custom_styling()
 
@@ -80,16 +77,6 @@ class EnterpriseApp:
         if "rag_model" not in st.session_state:
             st.session_state.rag_model = list(SQL_MODELS.keys())[0]  # Use SQL models for RAG too
             
-    def setup_rag_system(self):
-        """Initialize the Financial RAG System"""
-        try:
-            # Create the RAG system with selected model
-            self.rag_system = FinancialRAGSystem(
-                groq_model=SQL_MODELS.get(st.session_state.rag_model, st.session_state.rag_model)
-            )
-        except Exception as e:
-            st.error(f"Error setting up RAG system: {str(e)}")
-            
     def load_data_from_db(self):
         """Load data from database if session is empty"""
         if st.session_state.current_batch is None:
@@ -114,12 +101,44 @@ class EnterpriseApp:
     def setup_agents(self):
         """Configure intelligent agents based on selected models"""
         try:
-            # Create new agent instances with selected models
-            self.db_agent = DBAgent()
+            # Obtener el modelo seleccionado para SQL
             modelo_sql = SQL_MODELS.get(st.session_state.sql_model, st.session_state.sql_model)
-            self.db_agent.llm = CustomLLM(modelo_sql, provider="groq")
+            
+            # Definir rutas para los PDFs de las empresas
+            pdf_paths = self.get_company_pdfs()
+            
+            # Crear el agente unificado con el modelo y rutas de PDFs
+            self.agent = UnifiedAgent(
+                groq_model=modelo_sql,
+                cache_dir="./cache",
+                pdf_paths=pdf_paths
+            )
         except Exception as e:
             st.error(f"Error setting up agents: {str(e)}")
+            
+    def get_company_pdfs(self, pdf_directory="./informes"):
+        """Encuentra todos los PDFs de informes de empresas en el directorio especificado"""
+        pdf_paths = {}
+        
+        # Asegurar que el directorio existe
+        import os
+        os.makedirs(pdf_directory, exist_ok=True)
+        
+        # Buscar archivos PDF
+        for filename in os.listdir(pdf_directory):
+            if filename.lower().endswith('.pdf'):
+                # Extraer el nombre de la empresa del nombre del archivo
+                company_name = filename.replace('informe-', '').replace('.pdf', '')
+                pdf_paths[company_name] = os.path.join(pdf_directory, filename)
+        
+        # Si no se encontraron PDFs, usar las rutas predeterminadas
+        if not pdf_paths:
+            pdf_paths = {
+                "repsol": "informe-repsol.pdf",
+                "telefonica": "informe-telefonica.pdf"
+            }
+        
+        return pdf_paths
 
     def render_sidebar(self):
         """Render sidebar with loading options and filters"""
@@ -163,7 +182,6 @@ class EnterpriseApp:
                     
                 if models_changed:
                     self.setup_agents()
-                    self.setup_rag_system()
                 
                 # File Upload Section
                 st.subheader("📤 Data Upload")
@@ -385,40 +403,23 @@ class EnterpriseApp:
                 st.success("Historial de consultas borrado")
                 st.experimental_rerun()
             
-            # Company context for RAG queries
-            if st.session_state.current_batch is not None and not st.session_state.current_batch['data'].empty:
-                st.markdown("### Contexto para consultas financieras")
-                st.info("Selecciona una empresa para hacer preguntas específicas sobre su información financiera.")
+            # Information about financial data
+            st.markdown("### Información Financiera")
+            
+            # Mostrar qué empresas tienen informes disponibles
+            if hasattr(self, 'agent') and hasattr(self.agent, 'pdf_paths'):
+                available_companies = list(self.agent.pdf_paths.keys())
+                company_list = ", ".join([company.capitalize() for company in available_companies])
                 
-                # Get unique company names
-                df = st.session_state.current_batch['data']
-                company_names = df['razon_social'].dropna().unique().tolist()
+                st.info(f"Puedes realizar consultas sobre información financiera de las siguientes empresas: {company_list}")
                 
-                if company_names:
-                    selected_company = st.selectbox(
-                        "Selecciona una empresa",
-                        ["Ninguna"] + company_names,
-                        index=0,
-                        help="Selecciona una empresa para preguntas específicas sobre información financiera"
-                    )
-                    
-                    if selected_company != "Ninguna":
-                        if st.button("Establecer como contexto actual"):
-                            st.session_state.current_company = selected_company
-                            st.success(f"✅ {selected_company} establecida como contexto actual")
-                            
-                            # Add a button to search for financial information
-                            with st.spinner(f"Buscando información financiera de {selected_company}..."):
-                                company_info = self.rag_system.search_company_info(selected_company)
-                                if company_info and not company_info.get('error'):
-                                    st.success(f"Información financiera encontrada para {selected_company}")
-                                    st.json(company_info)
-                                else:
-                                    st.warning(f"No se encontró información financiera para {selected_company}")
-                    elif st.session_state.current_company:
-                        if st.button("Limpiar contexto actual"):
-                            st.session_state.current_company = None
-                            st.success("Contexto limpiado")
+                st.markdown("Ejemplos de consultas financieras:")
+                for company in available_companies[:2]:  # Mostrar ejemplos para las primeras 2 empresas
+                    st.markdown(f"- ¿Cuál fue la facturación de {company.capitalize()} el año pasado?")
+                    st.markdown(f"- ¿Cuántos empleados tiene {company.capitalize()}?")
+                    st.markdown(f"- ¿En qué sectores opera {company.capitalize()}?")
+            else:
+                st.info("No hay informes financieros disponibles actualmente.")
         
         with chat_tab:
             # Display chat history
@@ -456,8 +457,8 @@ class EnterpriseApp:
         with query_container:
             query = st.text_area(
                 "Escribe tu consulta en lenguaje natural",
-                placeholder="Ejemplo: Dame las primeras 10 empresas en Madrid, o ¿Cuál es la información financiera de Empresa X?",
-                help="Se traducirá a una consulta SQL o recuperará información financiera"
+                placeholder="Ejemplo: Dame las primeras 10 empresas en Madrid, o ¿Cuáles fueron los ingresos de Repsol?",
+                help="Se traducirá a una consulta SQL o recuperará información financiera del informe de Repsol"
             )
             
             if st.button("Enviar Consulta"):
@@ -473,81 +474,10 @@ class EnterpriseApp:
 
     def process_unified_query(self, query: str):
         """Process a unified query - handle both SQL and RAG responses"""
-        # Check if it's explicitly asking about a company
-        company_pattern = re.compile(r'sobre\s+([A-Za-z0-9\s]+)', re.IGNORECASE)
-        company_match = company_pattern.search(query)
-        
-        # If a company is mentioned directly in the query, use it
-        if company_match:
-            company_name = company_match.group(1).strip()
-            
-            with st.spinner(f"Buscando información sobre {company_name}..."):
-                try:
-                    # Search for company info
-                    company_info = self.rag_system.search_company_info(company_name)
-                    
-                    # Set a token limit (e.g., 1000 tokens)
-                    MAX_TOKENS = 1000
-                    
-                    # Get RAG answer
-                    answer = self.rag_system.answer_financial_question(company_name, query)
-                    
-                    # Truncate answer if too long
-                    if len(answer.split()) > MAX_TOKENS:
-                        truncated_answer = " ".join(answer.split()[:MAX_TOKENS])
-                        truncated_answer += "... [Respuesta truncada por longitud]"
-                        answer = truncated_answer
-                    
-                    # Add assistant message to chat history
-                    st.session_state.chat_history.append({
-                        "role": "assistant", 
-                        "content": answer,
-                        "type": "financial",
-                        "company": company_name
-                    })
-                    return
-                except Exception as e:
-                    error_msg = f"Error buscando información: {str(e)}"
-                    st.session_state.chat_history.append({
-                        "role": "assistant", 
-                        "content": error_msg,
-                        "type": "error"
-                    })
-                    return
-        
-        # Otherwise check if a company is already selected in configuration
-        elif st.session_state.current_company and any(keyword in query.lower() for keyword in [
-            "financial", "finances", "revenue", "income", "profit", "empleados", 
-            "facturación", "ingresos", "beneficio", "financiera", "financieras", "financiero"
-        ]):
-            # Process using RAG for financial information
-            with st.spinner(f"Getting financial information for {st.session_state.current_company}..."):
-                try:
-                    answer = self.rag_system.answer_financial_question(
-                        st.session_state.current_company, query
-                    )
-                    
-                    # Add assistant message to chat history
-                    st.session_state.chat_history.append({
-                        "role": "assistant", 
-                        "content": answer,
-                        "type": "financial",
-                        "company": st.session_state.current_company
-                    })
-                except Exception as e:
-                    error_msg = f"Error getting financial information: {str(e)}"
-                    st.session_state.chat_history.append({
-                        "role": "assistant", 
-                        "content": error_msg,
-                        "type": "error"
-                    })
-            return
-            
-        # Otherwise process as a SQL query
         try:
-            with st.spinner("Processing query..."):
+            with st.spinner("Procesando consulta..."):
                 # Generate query
-                query_info = self.db_agent.generate_query(query)
+                query_info = self.agent.process_query(query)
                 
                 # Check for errors
                 if query_info.get("error"):
@@ -557,8 +487,26 @@ class EnterpriseApp:
                         "type": "error"
                     })
                     return
+                
+                # Handle financial queries
+                if query_info["query_type"] == "financial":
+                    st.session_state.chat_history.append({
+                        "role": "assistant", 
+                        "content": query_info["explanation"],
+                        "type": "financial"
+                    })
+                    return
+                
+                # Handle non-DB queries
+                if query_info["query_type"] == "non_db":
+                    st.session_state.chat_history.append({
+                        "role": "assistant", 
+                        "content": query_info["explanation"],
+                        "type": "non_db"
+                    })
+                    return
                     
-                # Execute query
+                # Execute SQL query
                 results = self.db.execute_query(query_info["query"], return_df=True)
                 
                 # Generate response message
